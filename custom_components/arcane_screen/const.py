@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 DOMAIN = "arcane_screen"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 # The PiPup build we install and test against. Downloaded from its own GitHub release at setup time (never bundled).
 # mhoogenbosch/PiPup is MIT for its own changes; see README "Credits".
