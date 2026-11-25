@@ -1,17 +1,17 @@
 {
   "domain": "arcane_screen",
   "name": "Arcane Screen",
+  "after_dependencies": [
+    "calendar",
+    "camera",
+    "weather"
+  ],
   "codeowners": [
     "@deekay2153"
   ],
   "config_flow": true,
   "dependencies": [
     "http"
-  ],
-  "after_dependencies": [
-    "weather",
-    "calendar",
-    "camera"
   ],
   "documentation": "https://github.com/deekay2153/arcane-screen",
   "integration_type": "device",
