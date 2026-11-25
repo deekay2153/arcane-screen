@@ -218,7 +218,7 @@
     },
     "welcome": {
       "name": "Welcome home",
-      "description": "Full-screen 'Welcome home, <name>' with up to three live cameras (the first one big). Closes after the set time, with a tap, or with Close welcome.",
+      "description": "Full-screen 'Welcome home, Alex' with up to three live cameras (the first one big). Closes after the set time, with a tap, or with Close welcome.",
       "fields": {
         "screen": {
           "name": "Screen",
@@ -226,7 +226,7 @@
         },
         "name": {
           "name": "Name",
-          "description": "Shown as 'Welcome home, <name>'."
+          "description": "Shown as 'Welcome home, Alex'."
         },
         "message": {
           "name": "Status line",
