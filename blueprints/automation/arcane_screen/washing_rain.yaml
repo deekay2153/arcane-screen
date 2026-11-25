@@ -1,0 +1,100 @@
+blueprint:
+  name: Arcane Screen - rain on the washing
+  description: >
+    While the washing is out (any on/off entity, e.g. a helper you flip when you hang it), checks the hourly forecast
+    every 10 minutes. If rain is likely soon, a banner slides in once and an amber notice stays until the washing is
+    brought in or the rain chance drops.
+  domain: automation
+  source_url: https://github.com/deekay2153/arcane-screen/blob/main/blueprints/automation/arcane_screen/washing_rain.yaml
+  input:
+    screen:
+      name: Screen
+      description: Leave empty for every screen.
+      default: ""
+      selector:
+        config_entry:
+          integration: arcane_screen
+    washing_out:
+      name: Washing is out
+      description: On while the washing is on the line.
+      selector:
+        entity:
+          domain: [input_boolean, binary_sensor, switch]
+    weather:
+      name: Weather with an hourly forecast
+      selector:
+        entity:
+          domain: weather
+    chance:
+      name: Rain chance that counts
+      default: 50
+      selector:
+        number:
+          min: 10
+          max: 100
+          step: 5
+          unit_of_measurement: "%"
+    hours:
+      name: Look ahead
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 6
+          unit_of_measurement: h
+
+mode: single
+
+variables:
+  screen: !input screen
+  washing: !input washing_out
+  weather: !input weather
+  chance: !input chance
+  hours: !input hours
+
+trigger:
+  - platform: time_pattern
+    minutes: /10
+  - platform: state
+    entity_id: !input washing_out
+
+action:
+  - if:
+      - condition: template
+        value_template: "{{ not is_state(washing, 'on') }}"
+    then:
+      - service: arcane_screen.clear_notice
+        data:
+          screen: "{{ screen }}"
+          id: washing_rain
+      - stop: Washing is in
+  - service: weather.get_forecasts
+    target:
+      entity_id: "{{ weather }}"
+    data:
+      type: hourly
+    response_variable: fc
+    continue_on_error: true   # a weather entity without an hourly forecast: treat it as "no rain known", no error every 10 min
+  - variables:
+      soon: >
+        {{ ((((fc if fc is defined else {}).get(weather) or {}).get('forecast')) or [])[:hours | int]
+           | map(attribute='precipitation_probability') | map('float', 0) | max(default=0) }}
+  - if:
+      - condition: template
+        value_template: "{{ soon >= chance }}"
+    then:
+      # The banner only comes the first time; re-sending the notice every 10 minutes just keeps it up.
+      - service: arcane_screen.notice
+        data:
+          screen: "{{ screen }}"
+          id: washing_rain
+          text: Rain soon, washing is out
+          icon: rain
+          level: warn
+          banner_title: Rain soon
+          banner_message: "{{ soon | round }}% chance of rain soon, and the washing is still out"
+    else:
+      - service: arcane_screen.clear_notice
+        data:
+          screen: "{{ screen }}"
+          id: washing_rain

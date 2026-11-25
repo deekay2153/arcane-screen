@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1024, initial-scale=1">
+<title>Arcane Screen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!--
+  Arcane Screen page. Loaded ONCE by PiPup; Home Assistant pushes data down an open line (server-sent events), so the
+  page is never re-sent. Built for weak intercom hardware (tested on a Rockchip RK3326 / Mali-G31 with a 2018-era
+  WebView). Rules learned the hard way on that chip:
+  - no live blur (backdrop-filter): each glass panel carries its own copy of a pre-blurred twin of the wallpaper;
+  - nothing moves behind the glass, no always-on animation; only opacity / transform on small layers;
+  - touch the DOM only when something actually changed.
+-->
+<style>
+:root { --fg: #FFFFFF; --mut: rgba(255, 255, 255, .74); --dim: rgba(255, 255, 255, .56); --base: #080C24; --veil: rgba(0, 0, 0, 0);
+        --wall: url(wall-eclipse-1.webp); --wglass: url(wall-eclipse-1-glass.webp); }
+html, body { margin: 0; width: 1024px; height: 600px; overflow: hidden; background: transparent; color: var(--fg);
+             font-family: Inter, -apple-system, system-ui, sans-serif;
+             -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+/* The WebView is white underneath, so the page itself stays solid dark and only its contents fade
+   (fading the whole page let white through: seen on a real screen 25 Nov). */
+html { background: #080C24; }
+body { opacity: 0; transition: opacity .45s ease-in-out; }
+html.shown body { opacity: 1; transition: opacity .35s ease-out; }
+.night { --ct: #FFFFFF; --cb: #9FA9FF; }
+.dawn  { --ct: #FFFFFF; --cb: #FFAAC6; }
+.day   { --ct: #FFFFFF; --cb: #9FD8FF; }
+.dusk  { --ct: #FFF4E8; --cb: #FFA884; }
+.wet   { --veil: rgba(48, 62, 84, .42); }
+
+#bg, .glass > .wp { background-color: var(--base); background-repeat: no-repeat; background-size: 1024px 600px; }
+#bg { position: absolute; inset: 0; background-image: linear-gradient(var(--veil), var(--veil)), var(--wall); }
+
+/* ---------- glass, baked ---------- */
+.glass { position: relative; border-radius: 28px; overflow: hidden; isolation: isolate; box-shadow: 0 14px 34px rgba(6, 8, 28, .24); }
+.glass > .wp { position: absolute; left: 0; top: 0; width: 1024px; height: 600px; z-index: -1; pointer-events: none;
+               background-image: linear-gradient(var(--veil), var(--veil)), var(--wglass); }
+.glass > .tn { position: absolute; inset: 0; z-index: -1; pointer-events: none;
+               background: linear-gradient(160deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, .07) 52%, rgba(255, 255, 255, .11)); }
+.glass::before { content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1.3px; pointer-events: none; z-index: 2;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .9), rgba(255, 255, 255, .18) 28%, rgba(255, 255, 255, 0) 50%, rgba(255, 255, 255, .1) 72%, rgba(255, 255, 255, .55));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+.glass::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 2;
+  background: radial-gradient(130% 75% at 12% -18%, rgba(255, 255, 255, .26), rgba(255, 255, 255, 0) 58%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 2px 2px 7px rgba(255, 255, 255, .16), inset -2px -3px 9px rgba(0, 0, 0, .07); }
+.glass > * { position: relative; z-index: 1; }
+.glass > .wp, .glass > .tn { position: absolute; z-index: -1; }
+.pill { border-radius: 999px; }
+
+/* ---------- layout ---------- */
+#root { position: relative; box-sizing: border-box; width: 1024px; height: 600px; padding: 38px 44px 34px;
+        display: flex; flex-direction: column; gap: 16px; text-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; flex-grow: 1; }
+.left { padding-top: 6px; }
+.date { font-size: 21px; font-weight: 600; color: var(--mut); padding-left: 6px; }
+.clock { display: flex; align-items: baseline; gap: 8px; margin-top: 2px; }
+.time { font-size: 158px; font-weight: 600; letter-spacing: -7px; line-height: .9; font-variant-numeric: tabular-nums; text-shadow: none;
+        color: transparent; -webkit-background-clip: text; background-clip: text;
+        background-image: linear-gradient(180deg, var(--ct) 12%, var(--cb) 92%); }
+.ampm { font-size: 30px; font-weight: 600; color: var(--mut); }
+.next { width: 440px; margin: 26px 0 0 4px; padding: 12px 16px 8px; border-radius: 24px; }
+.next .lab { display: flex; justify-content: space-between; }
+.next .more { color: var(--mut); letter-spacing: .4px; }
+/* notices: pills under the clock that stay until cleared */
+.notes { display: flex; gap: 8px; margin: 16px 0 0 4px; max-width: 440px; overflow: hidden; }
+.notes.hidden { display: none; }
+.notes:not(.hidden) + .next { margin-top: 12px; }
+.npill { height: 34px; padding: 0 14px; display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; white-space: nowrap; flex: none; }
+.npill span { overflow: hidden; text-overflow: ellipsis; }
+.npill svg { flex: none; }
+.ev { display: flex; align-items: center; gap: 12px; height: 30px; font-size: 15px; font-weight: 600; }
+.ev.none { color: var(--mut); font-weight: 500; }
+.ev .when { width: 160px; flex: none; display: flex; gap: 8px; color: var(--mut); white-space: nowrap; }
+.ev .when b { color: #FFD9AE; font-weight: 700; }
+.ev .what { flex-grow: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.wx { width: 404px; display: flex; flex-direction: column; gap: 12px; }
+.card { padding: 14px 16px; }
+.now { display: flex; align-items: center; gap: 12px; padding: 2px 4px 12px; }
+.nowt { font-size: 52px; font-weight: 400; line-height: 1; letter-spacing: -2px; }
+.nows { display: flex; flex-direction: column; gap: 3px; font-size: 15px; font-weight: 500; color: var(--mut); }
+.nows b { color: var(--fg); font-weight: 600; }
+.hours { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .16); }
+.h { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.h .t { font-size: 13px; font-weight: 600; color: var(--mut); }
+.h .t.n { color: var(--fg); }
+.h .v { font-size: 16px; font-weight: 600; }
+.lab { font-size: 11px; font-weight: 700; letter-spacing: 1.3px; color: var(--dim); padding: 0 4px 6px; }
+.week { display: flex; flex-direction: column; }
+.d { height: 28px; display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; padding: 0 4px; }
+.d .n { width: 40px; }
+.d .i { width: 58px; display: flex; align-items: center; gap: 4px; }
+.d .c { font-size: 11px; font-weight: 700; color: #8FD3FF; }
+.d .lo { width: 30px; text-align: right; color: var(--dim); }
+.d .hi { width: 30px; }
+.bar { flex-grow: 1; position: relative; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .2); }
+.bar i { position: absolute; top: 0; height: 6px; border-radius: 3px; box-shadow: 0 0 8px rgba(255, 255, 255, .25); }
+.nowx { color: var(--mut); font-size: 15px; font-weight: 500; padding: 8px 4px; }
+
+/* ---------- chips: low, wide, equal width; symbol + tint carry the state ---------- */
+.bottom { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.chips { display: flex; gap: 10px; flex: 1 1 auto; justify-content: center; }
+.chip { height: 36px; padding: 0 10px; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 14px; font-weight: 600; letter-spacing: .1px; white-space: nowrap;
+        flex: 1 1 0; min-width: 0; max-width: 150px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .16), 0 8px 18px rgba(6, 8, 28, .24); }
+.chip span { overflow: hidden; text-overflow: ellipsis; }
+.chip svg { flex: none; }
+.npill.good > .tn { background: linear-gradient(160deg, rgba(125, 225, 175, .48), rgba(125, 225, 175, .22)); }
+.npill.warn > .tn { background: linear-gradient(160deg, rgba(255, 180, 70, .6), rgba(255, 160, 50, .3)); }
+.npill.alert > .tn { background: linear-gradient(160deg, rgba(238, 62, 62, .94), rgba(196, 34, 40, .86)); }
+/* a tinting notice washes every glass panel amber or red (a flat colour on the existing tint layer: no extra drawing) */
+html.tint-warn .glass:not(.npill):not(.on):not(.warn):not(.alert):not(.good):not(.move) > .tn { background: linear-gradient(160deg, rgba(255, 176, 64, .36), rgba(255, 150, 40, .14) 52%, rgba(255, 170, 60, .22)); }
+html.tint-alert .glass:not(.npill):not(.on):not(.warn):not(.alert):not(.good):not(.move) > .tn { background: linear-gradient(160deg, rgba(240, 70, 60, .42), rgba(214, 40, 40, .18) 52%, rgba(232, 60, 54, .28)); }
+.chip.on > .tn { background: linear-gradient(160deg, rgba(125, 225, 175, .48), rgba(125, 225, 175, .22)); }
+.chip.warn > .tn { background: linear-gradient(160deg, rgba(255, 180, 70, .42), rgba(255, 180, 70, .16)); }
+.chip.alert > .tn { background: linear-gradient(160deg, rgba(238, 62, 62, .94), rgba(196, 34, 40, .86)); }
+.chip.move > .tn { background: linear-gradient(160deg, rgba(95, 196, 251, .5), rgba(95, 196, 251, .24)); will-change: opacity; animation: gmove 1.5s ease-in-out infinite; }
+.chip.off { opacity: .55; }
+@keyframes gmove { 50% { opacity: .35; } }
+
+/* ---------- big buttons (in place of the week card) ---------- */
+.btngrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.btn { height: 68px; border-radius: 18px; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden;
+       background: rgba(255, 255, 255, .12); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .26); }
+.btn span { overflow: hidden; text-overflow: ellipsis; }
+.btn svg { flex: none; }
+.btngrid.many { gap: 8px; }
+.btngrid.many .btn { height: 51px; }
+.btn:last-child:nth-child(odd) { grid-column: 1 / -1; justify-content: center; }
+.btn.on { background: linear-gradient(135deg, #FFD98A, #F2A640); color: #2A1A04; box-shadow: none; }
+.btn.busy { opacity: .6; }
+
+/* ---------- popouts ---------- */
+#pop { position: absolute; inset: 0; z-index: 20; background: rgba(4, 6, 20, .5); display: flex; align-items: center; justify-content: center; }
+#pop.warm { opacity: .004; pointer-events: none; }
+.popcard { width: 640px; border-radius: 30px; overflow: hidden; }
+#popCard { will-change: transform, opacity; }
+.pscroll { max-height: 528px; overflow: hidden; touch-action: none; }
+.pbody { box-sizing: border-box; padding: 18px 22px 20px; will-change: transform; }
+#tapfx { position: absolute; z-index: 30; pointer-events: none; background: rgba(255, 255, 255, .2); opacity: 0; will-change: opacity; transition: opacity 220ms ease-out; }
+#tapfx.on { opacity: 1; transition: none; }
+.ph { display: flex; justify-content: space-between; align-items: baseline; padding: 0 2px 10px; }
+.ph .lab { padding: 0; }
+.ph .x { font-size: 12px; font-weight: 600; color: var(--dim); }
+.big2 { display: flex; align-items: center; gap: 12px; padding: 0 2px; }
+.big2 b { font-size: 46px; font-weight: 500; letter-spacing: -1.5px; line-height: 1.05; }
+.big2 span { font-size: 19px; font-weight: 600; color: var(--mut); }
+.sub { font-size: 15px; font-weight: 600; padding: 8px 2px 0; }
+.sub2 { font-size: 14px; font-weight: 500; color: var(--mut); padding: 4px 2px 0; }
+.kv { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.kv div { border-radius: 16px; padding: 10px 14px; background: rgba(255, 255, 255, .1); font-size: 13px; font-weight: 600; color: var(--mut); }
+.kv div b { display: block; font-size: 20px; font-weight: 600; color: var(--fg); margin-top: 2px; }
+.h12 { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 2px; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .16); }
+.h12 .h { gap: 5px; }
+.h12 .r { font-size: 11px; font-weight: 700; color: #8FD3FF; min-height: 13px; }
+.wk .d { height: 52px; gap: 12px; border-bottom: 1px solid rgba(255, 255, 255, .1); }
+.wk .d:last-child { border-bottom: 0; }
+.wk .d .n { width: 82px; }
+.wk .d .n small { display: block; font-size: 12px; font-weight: 600; color: var(--dim); }
+.wk .d .tx { flex-grow: 1; font-size: 14px; font-weight: 500; color: var(--mut); }
+.wk .d .rn { width: 92px; font-size: 12px; font-weight: 700; color: #8FD3FF; text-align: right; }
+.wk .d .lh { width: 74px; text-align: right; }
+.wk .d .lh span { color: var(--dim); }
+.evl .ev { height: auto; min-height: 40px; align-items: flex-start; padding: 8px 2px; border-bottom: 1px solid rgba(255, 255, 255, .1); }
+.evl .ev:last-child { border-bottom: 0; }
+.evl .ev .what { white-space: normal; }
+.acts { display: flex; gap: 12px; margin-top: 18px; }
+.act { flex: 1 1 0; height: 66px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 10px;
+       font-size: 18px; font-weight: 600; background: rgba(255, 255, 255, .14); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .28); }
+.act.main { background: linear-gradient(135deg, #5FC4FB, #2F6FDD); box-shadow: none; }
+.act.sent { background: linear-gradient(160deg, #3AB270, #208C54); box-shadow: none; }
+.acts.busy .act:not(.sent) { opacity: .4; }
+.actmsg { font-size: 14px; font-weight: 600; color: var(--mut); padding: 10px 2px 0; }
+.note { font-size: 12px; font-weight: 500; color: var(--dim); padding: 12px 2px 0; }
+.hidden { display: none !important; }
+
+/* ---------- round buttons: wallpaper picker, exit ---------- */
+#btns { position: absolute; right: 459px; top: 34px; z-index: 3; display: flex; gap: 12px; }
+.rb { width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 20px rgba(6, 8, 28, .24); }
+.rb.busy { opacity: .45; }
+.walls { display: grid; grid-template-columns: repeat(4, 140px); gap: 14px 12px; padding: 2px; }
+.wt { font-size: 13px; font-weight: 600; color: var(--mut); text-align: center; }
+.wt i { display: flex; align-items: center; justify-content: center; width: 140px; height: 82px; border-radius: 14px; margin-bottom: 7px;
+        background: rgba(255, 255, 255, .1) url(wall-thumbs-1.webp) no-repeat; box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .22); }
+.wt i.auto { background-image: none; }
+.wt.on { color: var(--fg); }
+.wt.on i { box-shadow: 0 0 0 3px #fff; }
+
+/* ---------- banner: rises above the chip row (clear of the exit/picture buttons), tap to close ---------- */
+#banner { position: absolute; left: 50%; bottom: 84px; width: 640px; margin-left: -320px; z-index: 40; display: flex; align-items: center; gap: 14px;
+          padding: 14px 20px; border-radius: 24px; opacity: 0; transform: translateY(30px); will-change: opacity, transform;
+          transition: opacity .28s ease-out, transform .28s cubic-bezier(.2, .8, .2, 1); pointer-events: none; }
+#banner.up { opacity: 1; transform: none; pointer-events: auto; }
+#banner .tx { flex: 1 1 auto; min-width: 0; }
+#banner .tt { font-size: 17px; font-weight: 700; }
+#banner .ss { font-size: 15px; font-weight: 500; color: var(--mut); margin-top: 2px; }
+#banner svg { flex: none; }
+#banner.good > .tn { background: linear-gradient(160deg, rgba(125, 225, 175, .5), rgba(125, 225, 175, .22)); }
+#banner.warn > .tn { background: linear-gradient(160deg, rgba(255, 180, 70, .5), rgba(255, 180, 70, .2)); }
+#banner.alert > .tn { background: linear-gradient(160deg, rgba(238, 62, 62, .94), rgba(196, 34, 40, .86)); }
+/* ---------- welcome home: full screen, warm and bright on purpose (the one screen that isn't glass) ---------- */
+#welcome { position: absolute; inset: 0; z-index: 35; box-sizing: border-box; padding: 30px 40px 26px; display: flex; flex-direction: column; gap: 18px;
+           background: #F7F1E8; color: #2A231D; text-shadow: none; opacity: 0; transition: opacity .35s ease-out; will-change: opacity; }
+#welcome.hidden { display: none; }
+#welcome.up { opacity: 1; }
+.wtop { display: flex; justify-content: space-between; align-items: center; }
+.whi { font-size: 36px; font-weight: 800; letter-spacing: -.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 700px; }
+.wst { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 18px; font-weight: 700; color: #2E9E68; min-height: 24px; }
+.wst i { width: 12px; height: 12px; border-radius: 6px; background: #2E9E68; box-shadow: 0 0 0 4px rgba(46, 158, 104, .16); }
+.wst.empty { visibility: hidden; }
+.wst.moving i { animation: wpulse 1.6s ease-in-out infinite; }
+@keyframes wpulse { 0%, 100% { box-shadow: 0 0 0 3px rgba(46, 158, 104, .2); opacity: 1; } 50% { box-shadow: 0 0 0 9px rgba(46, 158, 104, .06); opacity: .55; } }
+.wmeta { display: flex; align-items: center; gap: 18px; font-size: 18px; font-weight: 600; color: #6E6358; }
+.wmeta .wwx { display: flex; align-items: center; gap: 6px; }
+.wmeta .wclk { color: #2A231D; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wcams { display: flex; gap: 16px; flex: 1 1 auto; min-height: 0; }
+.wside { display: flex; flex-direction: column; gap: 16px; flex: 1 1 0; }
+.wcam { position: relative; overflow: hidden; border-radius: 20px; background: #2B2722; flex: 1 1 0; }
+.wcam img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+
+.n3 .wcam.big { flex: none; width: 640px; }
+.wtag { position: absolute; left: 12px; bottom: 12px; height: 26px; padding: 0 10px; border-radius: 13px; background: rgba(0, 0, 0, .55);
+        color: #fff; display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 800; letter-spacing: 1px; }
+.wtag i { width: 8px; height: 8px; border-radius: 4px; background: #FF5A4E; }
+.n0 .whi { font-size: 56px; }
+.wnote { text-align: right; font-size: 14px; font-weight: 600; color: #8A7E70; min-height: 18px; }
+#banner.alert .ss { color: rgba(255, 255, 255, .92); }
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<div id="root">
+  <div class="top">
+    <div class="left">
+      <div class="date" id="date"></div>
+      <div class="clock"><div class="time" id="time"></div><div class="ampm" id="ampm"></div></div>
+      <div class="notes hidden" id="notes"></div>
+      <div class="glass next hidden" id="next" data-pop="events"><div class="lab">UP NEXT<span class="more"></span></div><div class="evs"></div></div>
+    </div>
+    <div class="wx">
+      <div class="glass card hidden" data-pop="hours" id="nowCard">
+        <div class="now">
+          <span id="nowIcon"></span>
+          <div class="nowt" id="nowTemp">--°</div>
+          <div class="nows"><b id="nowLabel"></b><span id="nowLoHi"></span></div>
+        </div>
+        <div class="hours" id="hours"></div>
+      </div>
+      <div class="glass card hidden" data-pop="week" id="weekCard">
+        <div class="lab">THIS WEEK</div>
+        <div class="week" id="week"></div>
+      </div>
+      <div class="glass card hidden" id="btnCard">
+        <div class="lab">QUICK BUTTONS</div>
+        <div class="btngrid" id="btnGrid"></div>
+      </div>
+    </div>
+  </div>
+  <div class="bottom"><div class="chips" id="chips"></div></div>
+  <div id="btns">
+    <div class="rb glass pill" data-pop="walls"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m21 15-4.5-4.5L7 20"/></svg></div>
+    <div class="rb glass pill" id="exit"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg></div>
+  </div>
+  <div id="tapfx"></div>
+  <div id="pop" class="hidden"><div class="glass popcard" id="popCard"><div class="pscroll" id="popScroll"><div class="pbody" id="popBody"></div></div></div></div>
+  <div id="welcome" class="hidden">
+    <div class="wtop">
+      <div><div class="whi"></div><div class="wst empty"><i></i><span></span></div></div>
+      <div class="wmeta"><span class="wwx"></span><span class="wclk"></span></div>
+    </div>
+    <div class="wcams"></div>
+    <div class="wnote"></div>
+  </div>
+  <div class="glass" id="banner"><span class="ic"></span><div class="tx"><div class="tt"></div><div class="ss"></div></div></div>
+</div>
+<script>
+var Q = new URLSearchParams(location.search);
+var HASH = new URLSearchParams(location.hash.slice(1));   // #feed=...&act=...  (a #fragment is never sent to a server)
+var FEED = HASH.get('feed'), ACT = HASH.get('act'), SELF_ID = Q.get('id') || 'arcane_screen';
+var CUR = null;
+var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+// ---------- icons (our own simple line drawings, 24x24) ----------
+var S = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+var CLOUD = '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" fill="#E6ECF2"/>';
+var ICONS = {
+  sun: '<circle cx="12" cy="12" r="4.5" fill="#FFCF4A"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12h2.5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8" stroke="#FFCF4A" stroke-width="2" stroke-linecap="round"/>',
+  moon: '<path d="M14.5 3.5a8.5 8.5 0 1 0 6 14.4A7 7 0 0 1 14.5 3.5Z" fill="#F3E3A0"/>',
+  partly: '<circle cx="8.5" cy="8.5" r="4" fill="#FFCF4A"/><path d="M18 20H10.5a5 5 0 1 1 4.8-6.4h1.2a3.2 3.2 0 1 1 1.5 6.4Z" fill="#E6ECF2"/>',
+  cloud: CLOUD,
+  rain: '<path d="M17.5 16H9a6.5 6.5 0 1 1 6.23-8.4h1.67a4.2 4.2 0 1 1 .6 8.4Z" fill="#E6ECF2"/><path d="M8.5 18.5v2.5M12.5 18.5v3.5M16.5 18.5v2.5" stroke="#5FB8F5" stroke-width="2" stroke-linecap="round"/>',
+  storm: '<path d="M17.5 15H9a6.5 6.5 0 1 1 6.23-8.4h1.67a4.2 4.2 0 1 1 .6 8.4Z" fill="#E6ECF2"/><path d="m12.5 16-2 3.5h3l-2 3.5" stroke="#FFCF4A" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  fog: '<path d="M4 9h16M3 13h18M5 17h14" stroke="#E6ECF2" stroke-width="2.2" stroke-linecap="round"/>',
+  snow: '<g ' + S + ' stroke="#8FD3FF"><path d="M12 2v20M4.2 6.5l15.6 9M4.2 17.5l15.6-9"/></g>',
+  flame: '<path d="M12 22c4 0 7-2.8 7-7 0-3.5-2.4-6.3-4.2-8.3-.4.9-1.2 2.6-2.8 2.6C11 9.3 11.6 5 10 2 6.5 4.8 5 9.5 5 14.5 5 18.9 8 22 12 22Z" ' + S + ' stroke="#FF9A5C"/>',
+  thermo: '<path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z" ' + S + ' stroke="#5FC4FB"/>',
+  drop: '<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5S5 13 5 15a7 7 0 0 0 7 7Z" ' + S + ' stroke="#5FC4FB"/>',
+  bolt: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" ' + S + ' stroke="#F2C66D"/>',
+  battery: '<g ' + S + ' stroke="#7DD3A8"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2M6 11v2M10 11v2"/></g>',
+  leaf: '<g ' + S + ' stroke="#7DD3A8"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></g>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" ' + S + ' stroke="#5FC4FB"/>',
+  shieldon: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" fill="rgba(255,255,255,.22)" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="m8.6 12.2 2.4 2.4 4.4-4.6" ' + S + ' stroke="#fff"/>',
+  garage: '<g ' + S + ' stroke="#5FC4FB"><path d="M18 21V10a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1v11"/><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35a2 2 0 0 1 1.26-1.86l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35z"/><path d="M6 13h12M6 17h12"/></g>',
+  garageopen: '<g ' + S + ' stroke="#FFC56B"><path d="M18 21V10a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1v11"/><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35a2 2 0 0 1 1.26-1.86l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35z"/><path d="M6 12h12" stroke-width="2.6"/></g>',
+  door: '<g ' + S + ' stroke="#5FC4FB"><path d="M13 4h3a2 2 0 0 1 2 2v14M2 20h3M13 20h9"/><path d="M10 12v.01"/><path d="M13 4.56v16.16a1 1 0 0 1-1.24.97L5 20V5.56a2 2 0 0 1 1.52-1.94l4-1A2 2 0 0 1 13 4.56Z"/></g>',
+  window: '<g ' + S + ' stroke="#5FC4FB"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M12 3v18M4 12h16"/></g>',
+  blinds: '<g ' + S + ' stroke="#5FC4FB"><path d="M3 3h18M20 7H4M20 11H4M20 15H4M12 15v4"/><circle cx="12" cy="20" r="1"/></g>',
+  lock: '<g ' + S + ' stroke="#5FC4FB"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></g>',
+  unlock: '<g ' + S + ' stroke="#FFC56B"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.9-1"/></g>',
+  bulb: '<g ' + S + ' stroke="#F2C66D"><path d="M9 18h6M10 22h4"/><path d="M15.1 14c.2-1 .7-1.7 1.4-2.5A4.6 4.6 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/></g>',
+  fan: '<g ' + S + ' stroke="#8FD3FF"><path d="M10.8 9.9C9 7.6 9.4 3 12.6 3c2.5 0 2.6 3.1 1.6 6.1M14.1 10.8c2.3-1.8 6.9-1.4 6.9 1.8 0 2.5-3.1 2.6-6.1 1.6M13.2 14.1c1.8 2.3 1.4 6.9-1.8 6.9-2.5 0-2.6-3.1-1.6-6.1M9.9 13.2C7.6 15 3 14.6 3 11.4c0-2.5 3.1-2.6 6.1-1.6"/><circle cx="12" cy="12" r="1.5"/></g>',
+  power: '<g ' + S + ' stroke="#7DD3A8"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></g>',
+  person: '<g ' + S + ' stroke="#5FC4FB"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></g>',
+  note: '<g ' + S + ' stroke="#F3EEF5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></g>',
+  play: '<path d="M7 4.5v15l12-7.5z" ' + S + ' stroke="#7DD3A8"/>',
+  alert: '<g ' + S + ' stroke="#FF8A7A"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></g>',
+  bell: '<g ' + S + ' stroke="#fff"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></g>',
+  truck: '<g ' + S + ' stroke="#BDF0CF"><path d="M2.5 6.5h11v9.5h-11z"/><path d="M13.5 9.5h4l3.5 3.5v3h-7.5"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></g>',
+  bin: '<g ' + S + ' stroke="#fff"><path d="M3.5 6.5h17M9 6.5V4.2c0-.6.5-1.2 1.2-1.2h3.6c.7 0 1.2.6 1.2 1.2v2.3M18.5 6.5l-.9 13.2c0 .7-.6 1.3-1.3 1.3H7.7c-.7 0-1.3-.6-1.3-1.3L5.5 6.5M10 11v6M14 11v6"/></g>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5" ' + S + ' stroke="#BDF0CF" stroke-width="2.6"/>',
+  dot: '<circle cx="12" cy="12" r="4" fill="#9FB4D8"/>'
+};
+function svg(kind, size) {
+  if (kind === 'gate') return gateSvg('closed', size);
+  return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" aria-hidden="true" style="color:#fff">' + (ICONS[kind] || ICONS.dot) + '</svg>';
+}
+// A sliding gate: two posts and a slatted panel that slides right as it opens.
+function gateSvg(mode, size, colour) {
+  var ink = colour || { opening: '#8FD3FF', open: '#8FD3FF', closing: '#FF9A5C' }[mode] || '#5FC4FB';
+  var dx = { opening: 9, closing: 9, open: 18 }[mode] || 0, slats = '';
+  for (var i = 0; i < 8; i++) slats += '<rect x="' + (5.21 + i * 1.81).toFixed(2) + '" y="6.5" width=".9" height="13"/>';
+  return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="' + ink + '" aria-hidden="true">' +
+    '<rect x="0" y="4.5" width="2.8" height="16.5" rx=".3"/><rect x="21.2" y="4.5" width="2.8" height="16.5" rx=".3"/>' +
+    '<svg x="3" y="0" width="18" height="24" viewBox="3 0 18 24"><g transform="translate(' + dx + ' 0)">' +
+    '<rect x="3" y="6.5" width="18" height="1.3"/><rect x="3" y="18.2" width="18" height="1.3"/><rect x="3" y="6.5" width="1.3" height="13"/>' +
+    '<rect x="19.7" y="6.5" width="1.3" height="13"/><rect x="11.4" y="6.5" width="1.2" height="13"/>' + slats + '</g></svg></svg>';
+}
+var LABELS = { sun: 'Sunny', moon: 'Clear', partly: 'Partly cloudy', cloud: 'Cloudy', rain: 'Rain', storm: 'Storms', fog: 'Fog', snow: 'Snow' };
+function iconFor(cond) {
+  return { sunny: 'sun', 'clear-night': 'moon', partlycloudy: 'partly', cloudy: 'cloud', rainy: 'rain', pouring: 'rain',
+           lightning: 'storm', 'lightning-rainy': 'storm', hail: 'storm', fog: 'fog', snowy: 'snow', 'snowy-rainy': 'snow',
+           windy: 'cloud', 'windy-variant': 'cloud', exceptional: 'cloud' }[cond] || 'cloud';
+}
+function wet(cond) { return /rain|pouring|lightning|hail/.test(cond || ''); }
+
+// ---------- small helpers ----------
+function el(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function r0(v) { return v == null || isNaN(v) ? '–' : Math.round(v); }
+function ordinal(n) { var v = n % 100; return n + (v >= 11 && v <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'); }
+function clock24() { return !!(CUR && CUR.clock24); }
+function hhmm(h, m) {
+  if (clock24()) return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+  return (h % 12 || 12) + (m ? ':' + String(m).padStart(2, '0') : '') + (h < 12 ? ' am' : ' pm');
+}
+function hourLabel(iso) { var d = new Date(iso); return isNaN(d) ? '' : clock24() ? String(d.getHours()).padStart(2, '0') : (d.getHours() % 12 || 12) + (d.getHours() < 12 ? ' am' : ' pm'); }
+function dayName(iso) { var p = iso.split('-'); return DAYS[new Date(+p[0], +p[1] - 1, +p[2]).getDay()].slice(0, 3); }
+function tempColour(t) {
+  var stops = [[12, '#6FA8F0'], [18, '#7CCBEA'], [23, '#F2C66D'], [28, '#F29A4B'], [32, '#F07A3E']];
+  if (CUR && /F/.test(CUR.unit || '')) t = (t - 32) * 5 / 9;
+  for (var i = 0; i < stops.length; i++) if (t <= stops[i][0]) return stops[i][1];
+  return stops[stops.length - 1][1];
+}
+function sinceText(iso) {
+  var d = new Date(iso);
+  if (!iso || isNaN(d)) return '';
+  var now = new Date(), days = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  return 'since ' + hhmm(d.getHours(), d.getMinutes()) + (days === 0 ? '' : days === 1 ? ' yesterday' : ' ' + DAYS[d.getDay()].slice(0, 3) + ' ' + ordinal(d.getDate()));
+}
+
+// ---------- wallpapers: chosen on the screen, kept on the screen ----------
+var WALL_LIST = [['eclipse', 'Eclipse'], ['contours', 'Contours'], ['dusk', 'Dusk'], ['ridge', 'Ridge'], ['nebula', 'Nebula'], ['orbit', 'Orbit'], ['lights', 'City lights']];
+function isWall(v) { return WALL_LIST.some(function (w) { return w[0] === v; }); }
+function wallSaved() { var v = null; try { v = localStorage.getItem('arcaneWall'); } catch (e) {} return isWall(v) ? v : 'auto'; }
+function wallSave(v) { try { localStorage.setItem('arcaneWall', v); } catch (e) {} }
+function wallOfDay() { var d = new Date(); return WALL_LIST[Math.floor((d.getTime() - d.getTimezoneOffset() * 60000) / 86400000) % WALL_LIST.length][0]; }
+function wallFiles(w) { return ['wall-' + w + '-1.webp', 'wall-' + w + '-1-glass.webp']; }
+function wallDecode(w) { return Promise.all(wallFiles(w).map(function (u) { var im = new Image(); im.src = u; return im.decode ? im.decode().catch(function () {}) : null; })); }
+function applyWall(w) {
+  var h = document.documentElement;
+  h.style.setProperty('--wall', 'url(wall-' + w + '-1.webp)');
+  h.style.setProperty('--wglass', 'url(wall-' + w + '-1-glass.webp)');
+  WALL = w;
+}
+var WALL_FORCED = isWall(Q.get('wall')) ? Q.get('wall') : null;
+var WALL_MODE = WALL_FORCED || wallSaved();
+function wallNow() { return WALL_FORCED || (WALL_MODE === 'auto' ? wallOfDay() : WALL_MODE); }
+var WALL = wallNow();
+applyWall(WALL);
+function chooseWall(mode) {
+  WALL_MODE = mode; WALL_FORCED = null; wallSave(mode);
+  var w = wallNow();
+  if (w !== WALL) wallDecode(w).then(function () { if (WALL_MODE === mode) applyWall(w); });
+}
+
+// ---------- phase (from the sun, sent by Home Assistant) ----------
+function autoPhase() { var h = new Date().getHours(); return h >= 5 && h < 7 ? 'dawn' : h >= 7 && h < 17 ? 'day' : h >= 17 && h < 19 ? 'dusk' : 'night'; }
+function applyPhase(d) {
+  var cls = (Q.get('phase') || (d && d.phase) || autoPhase()) + (d && d.now && wet(d.now.cond) ? ' wet' : '');
+  if (document.body.className !== cls) document.body.className = cls;
+}
+applyPhase(null);
+
+// ---------- first paint: only show the page once it has drawn ----------
+function reveal() {
+  if (reveal.done) return;
+  function go() { if (reveal.done) return; reveal.done = true; glassify(); requestAnimationFrame(function () { document.documentElement.classList.add('shown'); }); }
+  var waits = [document.fonts ? document.fonts.ready : null].concat(wallFiles(WALL).map(function (u) { var im = new Image(); im.src = u; return im.decode ? im.decode().catch(function () {}) : null; }));
+  Promise.all(waits).then(go);
+  setTimeout(go, 1500);
+}
+
+// ---------- clock ----------
+function tick() {
+  var d = new Date(), key = d.toDateString() + d.getHours() + ':' + d.getMinutes() + clock24();
+  if (key === tick.last) return;
+  tick.last = key;
+  var t = el('time'), h = d.getHours(), m = String(d.getMinutes()).padStart(2, '0');
+  var txt = clock24() ? String(h).padStart(2, '0') + ':' + m : (h % 12 || 12) + ':' + m;
+  if (t.textContent !== txt) t.textContent = txt;
+  el('ampm').textContent = clock24() ? '' : h < 12 ? 'am' : 'pm';
+  el('date').textContent = DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()];
+  welClock();
+  if (WALL_MODE === 'auto' && !WALL_FORCED && wallNow() !== WALL) { var w = wallNow(); wallDecode(w).then(function () { applyWall(w); }); }
+  glassify();
+}
+
+// ---------- calendar ----------
+function evWhen(e) {
+  var now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  var p = e.start.slice(0, 10).split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]), diff = Math.round((d - today) / 86400000);
+  var day = diff <= 0 ? 'Today' : diff === 1 ? 'Tomorrow' : DAYS[d.getDay()].slice(0, 3) + ' ' + ordinal(d.getDate()), time = 'All day';
+  if (e.start.length > 10) { var t = new Date(e.start); if (!isNaN(t)) time = hhmm(t.getHours(), t.getMinutes()); }
+  return '<div class="when"><b>' + day + '</b><span>' + time + '</span></div>';
+}
+function renderEvents(list, more) {
+  var box = el('next'), rows = (list || []).slice(0, 5), evs = box.querySelector('.evs');
+  more = (more || 0) + (list || []).length - rows.length;
+  box.querySelector('.more').textContent = more > 0 ? '+' + more + ' more' : '';
+  box.classList.remove('hidden');
+  evs.innerHTML = rows.length ? rows.map(function (e) { return '<div class="ev">' + evWhen(e) + '<div class="what">' + esc(e.title) + '</div></div>'; }).join('')
+                              : '<div class="ev none">Nothing in the next 7 days</div>';
+}
+
+// ---------- chips and buttons ----------
+function renderChips(list) {
+  return (list || []).map(function (c) {
+    var ic = c.icon === 'gate' ? gateSvg(c.gate || 'closed', 18) : svg(c.icon, 17);
+    return '<div class="chip glass pill ' + esc(c.tone || '') + '" data-pop="chip" data-i="' + c.i + '">' + ic + '<span>' + esc(c.text) + '</span></div>';
+  }).join('');
+}
+function renderNotes(list) {
+  list = list || [];
+  var box = el('notes');
+  box.classList.toggle('hidden', !list.length);
+  box.innerHTML = list.slice(0, 3).map(function (n) {
+    return '<div class="npill glass pill ' + esc(n.level || '') + '"' + (n.tap_clears ? ' data-note="' + esc(n.id) + '"' : '') + '>' + svg(n.icon || 'bell', 16) + '<span>' + esc(n.text) + '</span></div>';
+  }).join('');
+  var tint = list.some(function (n) { return n.tint && n.level === 'alert'; }) ? 'alert' : list.some(function (n) { return n.tint && n.level === 'warn'; }) ? 'warn' : '';
+  var h = document.documentElement;
+  h.classList.toggle('tint-alert', tint === 'alert');
+  h.classList.toggle('tint-warn', tint === 'warn');
+}
+// ---------- welcome home ----------
+var WEL = null, welTimer = null;
+function camUrl(i, w, still) { return ACT.replace('/act/', '/cam/') + '/' + i + '?w=' + w + (still ? '&still=1&t=' + Date.now() : ''); }
+function welTile(c, big, id) {
+  var w = big ? 640 : 320, tile = document.createElement('div');
+  tile.className = 'wcam' + (big ? ' big' : '');
+  tile.innerHTML = '<img class="still" alt=""><div class="wtag">' + (big ? '<i></i>' : '') + esc(c.name) + '</div>';
+  var shown = tile.querySelector('.still'), every = big ? 500 : 1000, fails = 0;
+  if (!ACT) return tile;
+  // Fresh pictures, fetched one at a time (an MJPEG stream froze on the real screen's WebView, 25 Nov): the next one is
+  // only asked for once the last has arrived, so a slow camera or screen just gets fewer frames, never a pile-up.
+  function next() {
+    if (!WEL || WEL.id !== id) return;
+    var started = Date.now(), im = new Image();
+    im.onload = function () {
+      if (!WEL || WEL.id !== id) return;
+      shown.src = im.src; fails = 0;
+      setTimeout(next, Math.max(0, every - (Date.now() - started)));
+    };
+    im.onerror = function () { setTimeout(next, Math.min(8000, 1000 * Math.pow(2, fails++))); };
+    im.src = camUrl(c.i, w, true);
+  }
+  next();
+  return tile;
+}
+function welClock() {
+  if (!WEL) return;
+  var d = new Date(), h = d.getHours(), m = String(d.getMinutes()).padStart(2, '0');
+  var box = el('welcome');
+  box.querySelector('.wclk').textContent = clock24() ? String(h).padStart(2, '0') + ':' + m : (h % 12 || 12) + ':' + m + (h < 12 ? ' am' : ' pm');
+  var n = CUR && CUR.now;
+  box.querySelector('.wwx').innerHTML = n ? svg(iconFor(n.cond), 22) + '<span>' + r0(n.temp) + '°</span>' : '';
+}
+function welStatus() {
+  var st = el('welcome').querySelector('.wst'), left = WEL.pulse_until ? new Date(WEL.pulse_until) - Date.now() : 0;
+  var text = left > 0 ? WEL.message : (WEL.after || WEL.message);
+  st.querySelector('span').textContent = text || '';
+  st.classList.toggle('empty', !text);
+  st.classList.toggle('moving', left > 0);
+  clearTimeout(welTimer);
+  if (left > 0) welTimer = setTimeout(welStatus, left + 50);
+}
+function welStop(box) {
+  Array.prototype.forEach.call(box.querySelectorAll('img'), function (i) { i.onerror = null; i.onload = null; i.removeAttribute('src'); });   // stops the streams
+}
+function renderWelcome(w) {
+  var box = el('welcome');
+  if (!w) {
+    if (!WEL) return;
+    WEL = null; clearTimeout(welTimer);
+    box.classList.remove('up');
+    setTimeout(function () { if (WEL) return; welStop(box); box.querySelector('.wcams').innerHTML = ''; box.classList.add('hidden'); }, 400);
+    return;
+  }
+  var fresh = !WEL || WEL.id !== w.id;
+  WEL = w;
+  box.querySelector('.whi').textContent = 'Welcome home, ' + w.name;
+  box.querySelector('.wnote').textContent = w.note || '';
+  if (fresh) {
+    var cams = w.cams || [], wrap = box.querySelector('.wcams');
+    welStop(box);
+    wrap.innerHTML = '';
+    box.className = 'n' + cams.length;
+    if (cams.length === 3) {
+      wrap.appendChild(welTile(cams[0], true, w.id));
+      var side = document.createElement('div'); side.className = 'wside';
+      side.appendChild(welTile(cams[1], false, w.id)); side.appendChild(welTile(cams[2], false, w.id));
+      wrap.appendChild(side);
+    } else cams.forEach(function (c) { wrap.appendChild(welTile(c, true, w.id)); });
+    requestAnimationFrame(function () { box.classList.add('up'); });
+  }
+  welStatus();
+  welClock();
+}
+function renderButtons(list) {
+  var on = !!(list && list.length);
+  el('btnCard').classList.toggle('hidden', !on);
+  el('weekCard').classList.toggle('hidden', on || !(CUR && CUR.daily && CUR.daily.length));
+  if (!on) return;
+  el('btnGrid').classList.toggle('many', list.length > 4);
+  el('btnGrid').innerHTML = list.map(function (b) {
+    return '<div class="btn' + (b.on ? ' on' : '') + '" data-btn="' + b.i + '">' + svg(b.icon, 26).replace('color:#fff', 'color:currentColor') + '<span>' + esc(b.name) + '</span></div>';
+  }).join('');
+}
+function send(body) {
+  return fetch(ACT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { if (!r.ok) throw new Error(r.status); });
+}
+function btnTap(b) {
+  if (b.classList.contains('busy') || !ACT) return;
+  b.classList.add('busy'); b.classList.toggle('on');
+  send({ kind: 'button', i: +b.getAttribute('data-btn') }).then(function () { b.classList.remove('busy'); })
+    .catch(function () { b.classList.remove('busy'); b.classList.toggle('on'); });
+}
+
+// ---------- popouts ----------
+var popTimer = null, popChip = -1;
+function popHead(title) { return '<div class="ph"><div class="lab">' + esc(title) + '</div><div class="x">Tap to close</div></div>'; }
+var POPS = {
+  hours: function (d) {
+    var n = d.now || {}, t = d.today || {}, kind = iconFor(n.cond);
+    return popHead('NEXT 12 HOURS') + '<div class="big2">' + svg(kind, 46) + '<b>' + r0(n.temp) + '°</b><span>' + LABELS[kind] + '</span></div>' +
+      '<div class="kv"><div>Today<b>' + r0(t.low) + '° – ' + r0(t.high) + '°</b></div><div>Humidity<b>' + (n.hum != null ? r0(n.hum) + '%' : '–') + '</b></div>' +
+      '<div>Wind<b>' + (n.wind != null ? r0(n.wind) + ' ' + esc(n.wind_unit || '') : '–') + '</b></div><div>Rain today<b>' + (t.chance != null ? r0(t.chance) + '%' : '–') + '</b></div></div>' +
+      '<div class="h12">' + (d.hourly || []).slice(0, 12).map(function (h, i) {
+        return '<div class="h"><div class="t' + (i === 0 ? ' n' : '') + '">' + (i === 0 ? 'Now' : hourLabel(h.t).replace(' ', '')) + '</div>' +
+          svg(iconFor(h.cond), 22) + '<div class="v">' + r0(h.temp) + '°</div><div class="r">' + (h.chance >= 20 ? r0(h.chance) + '%' : '') + '</div></div>';
+      }).join('') + '</div>';
+  },
+  week: function (d) {
+    return popHead('THE WEEK') + '<div class="wk">' + (d.daily || []).slice(0, 7).map(function (x) {
+      var p = x.d.split('-'), dt = new Date(+p[0], +p[1] - 1, +p[2]);
+      return '<div class="d"><div class="n">' + DAYS[dt.getDay()].slice(0, 3) + '<small>' + ordinal(dt.getDate()) + ' ' + MONTHS[dt.getMonth()].slice(0, 3) + '</small></div>' +
+        '<div class="i">' + svg(iconFor(x.cond), 24) + '</div><div class="tx">' + LABELS[iconFor(x.cond)] + '</div>' +
+        '<div class="rn">' + (x.chance >= 10 ? r0(x.chance) + '%' + (x.mm ? ' · ' + x.mm + ' mm' : '') : '') + '</div>' +
+        '<div class="lh"><span>' + r0(x.low) + '°</span> ' + r0(x.high) + '°</div></div>';
+    }).join('') + '</div>';
+  },
+  events: function (d) {
+    var rows = d.events || [];
+    return popHead('UP NEXT · 7 DAYS') + (rows.length ? '<div class="evl">' + rows.map(function (e) {
+      return '<div class="ev">' + evWhen(e) + '<div class="what">' + esc(e.title) + '</div></div>';
+    }).join('') + '</div>' : '<div class="sub">Nothing in the next 7 days.</div>') +
+      (d.events_more > 0 ? '<div class="note">and ' + d.events_more + ' more in the calendar</div>' : '');
+  },
+  chip: function (d) {
+    var c = (d.chips || [])[popChip];
+    if (!c) return popHead('');
+    var ic = c.icon === 'gate' ? gateSvg(c.gate || 'closed', 44) : svg(c.icon, 40);
+    var cap = function (s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); };
+    var big = c.text !== c.name ? c.text : cap(c.state);
+    return popHead(c.name.toUpperCase()) + '<div class="big2">' + ic + '<b>' + esc(big) + '</b></div>' +
+      (c.text !== c.name ? '<div class="sub">' + esc(cap(c.state)) + '</div>' : '') +
+      '<div class="sub2">' + esc(sinceText(c.changed)) + '</div>' +
+      (c.actions && c.actions.length ? '<div class="acts">' + c.actions.map(function (a, k) {
+        return '<div class="act' + (k === 0 ? ' main' : '') + '" data-act="' + esc(a.a) + '"><span>' + esc(a.label) + '</span></div>';
+      }).join('') + '</div><div class="actmsg hidden"></div>' : '');
+  },
+  walls: function () {
+    return popHead('BACKGROUND') + '<div class="walls">' +
+      '<div class="wt' + (WALL_MODE === 'auto' ? ' on' : '') + '" data-wall="auto"><i class="auto">' + svg('sun', 30) + '</i>Change daily</div>' +
+      WALL_LIST.map(function (w, n) {
+        return '<div class="wt' + (WALL_MODE === w[0] ? ' on' : '') + '" data-wall="' + w[0] + '"><i style="background-position:-' + (n * 140) + 'px 0"></i>' + w[1] + '</div>';
+      }).join('') + '</div>';
+  }
+};
+function popOpen() { var c = el('pop').classList; return !c.contains('hidden') && !c.contains('warm'); }
+function popFill(kind) {
+  if (!POPS[kind] || (!CUR && kind !== 'walls')) return false;
+  el('popBody').innerHTML = POPS[kind](CUR);
+  popSet(0, 0);
+  return true;
+}
+var popWarm = null;
+function warmPop(kind) {
+  var pop = el('pop');
+  if (popOpen() || !popFill(kind)) return;
+  pop.classList.add('warm'); pop.classList.remove('hidden');
+  el('popBody').offsetHeight;
+  glassifyPop();
+  popWarm = kind;
+}
+function coolPop() { var pop = el('pop'); if (pop.classList.contains('warm')) { pop.classList.add('hidden'); pop.classList.remove('warm'); } popWarm = null; }
+function openPop(kind) {
+  var pop = el('pop'), card = el('popCard');
+  if (popWarm !== kind || !pop.classList.contains('warm') || kind === 'chip') { coolPop(); if (!popFill(kind)) return; }
+  popWarm = null;
+  pop.classList.remove('hidden'); pop.classList.remove('warm');
+  glassifyPop();
+  if (card.animate) card.animate([{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: 'cubic-bezier(.2, .8, .2, 1)' });
+  clearTimeout(popTimer); popTimer = setTimeout(closePop, 30000);
+}
+function closePop() { clearTimeout(popTimer); popWarm = null; popChip = -1; var c = el('pop').classList; c.add('hidden'); c.remove('warm'); }
+var popY = 0, popDrag = null, popDragAt = 0;
+function popMin() { return Math.min(0, el('popScroll').clientHeight - el('popBody').offsetHeight); }
+function popSet(y, ms) { var b = el('popBody'); b.style.transition = ms ? 'transform ' + ms + 'ms cubic-bezier(.2, .8, .2, 1)' : 'none'; b.style.transform = y ? 'translate3d(0,' + y.toFixed(1) + 'px,0)' : 'none'; popY = y; }
+(function () {
+  var sc = el('popScroll');
+  sc.addEventListener('pointerdown', function (e) { popDrag = { y0: e.clientY, base: popY, ly: e.clientY, lt: e.timeStamp, v: 0, moved: false }; });
+  sc.addEventListener('pointermove', function (e) {
+    var d = popDrag; if (!d) return;
+    var dy = e.clientY - d.y0;
+    if (!d.moved) { if (Math.abs(dy) < 8) return; d.moved = true; try { sc.setPointerCapture(e.pointerId); } catch (x) {} }
+    var y = d.base + dy, min = popMin();
+    if (y > 0) y *= 0.35; else if (y < min) y = min + (y - min) * 0.35;
+    if (e.timeStamp > d.lt) { d.v = 0.6 * d.v + 0.4 * (e.clientY - d.ly) / (e.timeStamp - d.lt); d.ly = e.clientY; d.lt = e.timeStamp; }
+    popSet(y, 0);
+  });
+  function end(e) {
+    var d = popDrag; popDrag = null;
+    if (!d || !d.moved) return;
+    popDragAt = Date.now();
+    var stale = e.timeStamp - d.lt > 80;
+    popSet(Math.max(popMin(), Math.min(0, popY + (stale ? 0 : d.v * 260))), 460);
+    clearTimeout(popTimer); popTimer = setTimeout(closePop, 30000);
+  }
+  sc.addEventListener('pointerup', end);
+  sc.addEventListener('pointercancel', end);
+})();
+function popAction(b) {
+  var row = b.parentNode, msg = row.nextElementSibling, lab = b.querySelector('span'), was = lab.textContent;
+  if (row.classList.contains('busy') || !ACT) return;
+  row.classList.add('busy'); b.classList.add('sent'); lab.textContent = 'Sent';
+  clearTimeout(popTimer);
+  send({ kind: 'chip', i: popChip, a: b.getAttribute('data-act') }).then(function () { popTimer = setTimeout(closePop, 2000); })
+    .catch(function () {
+      row.classList.remove('busy'); b.classList.remove('sent'); lab.textContent = was;
+      msg.textContent = 'Couldn\'t reach Home Assistant, try again'; msg.classList.remove('hidden');
+      popTimer = setTimeout(closePop, 30000);
+    });
+}
+
+// ---------- exit: tell Home Assistant (it brings the page back later), and ask PiPup to close this window ----------
+function exitToHome() {
+  var b = el('exit'), n = 0;
+  if (b.classList.contains('busy')) return;
+  b.classList.add('busy');
+  if (ACT) send({ kind: 'exit' }).catch(function () {});
+  (function go() {
+    fetch('http://127.0.0.1:7979/cancel?id=' + encodeURIComponent(SELF_ID), { method: 'POST', mode: 'no-cors' }).catch(function () {});
+    if (++n < 3) setTimeout(go, 1500); else setTimeout(function () { b.classList.remove('busy'); }, 1500);
+  })();
+}
+
+// ---------- taps ----------
+el('root').addEventListener('click', function (e) {
+  var t = e.target;
+  if (t.closest('#banner')) { hideBanner(); return; }
+  if (t.closest('#welcome')) { renderWelcome(null); if (ACT) send({ kind: 'welcome' }).catch(function () {}); return; }
+  if (popOpen()) {
+    if (Date.now() - popDragAt < 400) return;
+    var b = t.closest('.act'), w = t.closest('[data-wall]');
+    if (w) {
+      chooseWall(w.getAttribute('data-wall'));
+      Array.prototype.forEach.call(document.querySelectorAll('.wt'), function (x) { x.classList.toggle('on', x === w); });
+      clearTimeout(popTimer); popTimer = setTimeout(closePop, 30000);
+    } else if (b) popAction(b); else closePop();
+    return;
+  }
+  if (t.closest('#exit')) { exitToHome(); return; }
+  var nt = t.closest('[data-note]');
+  if (nt) { if (ACT) send({ kind: 'note', id: nt.getAttribute('data-note') }).catch(function () {}); return; }
+  var bt = t.closest('[data-btn]');
+  if (bt) { btnTap(bt); return; }
+  var p = t.closest('[data-pop]');
+  if (p) { if (p.hasAttribute('data-i')) popChip = +p.getAttribute('data-i'); openPop(p.getAttribute('data-pop')); }
+});
+// Finger down: a highlight straight away; a popout is laid out while the finger is still on the glass.
+var pressed = null, coolTimer = null;
+el('root').addEventListener('pointerdown', function (e) {
+  var hit = e.target.closest('[data-btn], [data-pop], [data-note], #exit, .act, [data-wall]');
+  if (!hit) return;
+  pressed = hit;
+  var fx = el('tapfx'), r = hit.getBoundingClientRect(), s = fx.style;
+  s.left = r.left + 'px'; s.top = r.top + 'px'; s.width = r.width + 'px'; s.height = r.height + 'px'; s.borderRadius = getComputedStyle(hit).borderRadius;
+  fx.classList.add('on');
+  var kind = !popOpen() && hit.getAttribute('data-pop');
+  clearTimeout(coolTimer);
+  if (kind && kind !== 'chip') {
+    var go = function () { if (go.done) return; go.done = true; if (pressed === hit) warmPop(kind); };
+    requestAnimationFrame(function () { setTimeout(go, 0); });
+    setTimeout(go, 80);
+  }
+});
+function unpress() { el('tapfx').classList.remove('on'); pressed = null; clearTimeout(coolTimer); coolTimer = setTimeout(coolPop, 600); }
+document.addEventListener('pointerup', unpress);
+document.addEventListener('pointercancel', unpress);
+
+// ---------- banners (pushed by Home Assistant; one window, so nothing can cover them) ----------
+var bannerTimer = null;
+function showBanner(b) {
+  var box = el('banner');
+  box.className = 'glass ' + (b.tone && b.tone !== 'info' ? esc(b.tone) : '');
+  box.querySelector('.ic').innerHTML = svg(b.icon || 'bell', 30);
+  box.querySelector('.tt').textContent = b.title || '';
+  box.querySelector('.tt').classList.toggle('hidden', !b.title);
+  box.querySelector('.ss').textContent = b.message || '';
+  glassify();
+  requestAnimationFrame(function () { box.classList.add('up'); });
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(hideBanner, Math.max(3, Math.min(120, b.seconds || 15)) * 1000);
+}
+function hideBanner() { clearTimeout(bannerTimer); el('banner').classList.remove('up'); }
+
+// ---------- baked glass: line each panel's frosted copy up with the wallpaper ----------
+function glassifyPop() { var g = el('popCard'), wp = g.querySelector(':scope > .wp'), r = g.getBoundingClientRect(); if (!wp) return glassify(); if (r.width) { wp.style.left = -Math.round(r.left) + 'px'; wp.style.top = -Math.round(r.top) + 'px'; } }
+function glassify() {
+  Array.prototype.forEach.call(document.querySelectorAll('.glass'), function (g) {
+    var wp = g.querySelector(':scope > .wp');
+    if (!wp) {
+      var tn = document.createElement('div'); tn.className = 'tn'; g.insertBefore(tn, g.firstChild);
+      wp = document.createElement('div'); wp.className = 'wp'; g.insertBefore(wp, g.firstChild);
+    }
+    var r = g.getBoundingClientRect();
+    if (r.width) { wp.style.left = -Math.round(r.left) + 'px'; wp.style.top = -Math.round(r.top) + 'px'; }
+  });
+}
+
+// ---------- render: only the part whose data changed is rebuilt ----------
+var SIG = {};
+function changed(key, value) { var s = JSON.stringify(value === undefined ? null : value); if (SIG[key] === s) return false; SIG[key] = s; return true; }
+function render(d) {
+  CUR = d;
+  applyPhase(d);
+  var touched = false;
+  if (changed('clock', d.clock24)) { tick.last = null; tick(); }
+  if (changed('events', [d.events, d.events_more, new Date().toDateString()])) { renderEvents(d.events, d.events_more); touched = true; }
+  if (changed('now', [d.now, d.today, d.clock24])) {
+    var has = !!d.now;
+    el('nowCard').classList.toggle('hidden', !has);
+    if (has) {
+      var kind = iconFor(d.now.cond), t = d.today || {};
+      el('nowIcon').innerHTML = svg(kind, 50);
+      el('nowTemp').textContent = r0(d.now.temp) + '°';
+      el('nowLabel').textContent = LABELS[kind];
+      el('nowLoHi').textContent = t.high != null ? 'L ' + r0(t.low) + '°  ·  H ' + r0(t.high) + '°' + (t.chance >= 50 ? '  ·  ' + r0(t.chance) + '% rain' : '') : '';
+    }
+    touched = true;
+  }
+  if (changed('hours', [d.hourly && d.hourly.slice(0, 6), d.clock24])) {
+    var hs = (d.hourly || []).slice(0, 6);
+    el('hours').classList.toggle('hidden', !hs.length);
+    el('hours').innerHTML = hs.map(function (h, i) {
+      return '<div class="h"><div class="t' + (i === 0 ? ' n' : '') + '">' + (i === 0 ? 'Now' : hourLabel(h.t)) + '</div>' + svg(iconFor(h.cond), 24) + '<div class="v">' + r0(h.temp) + '°</div></div>';
+    }).join('');
+    touched = true;
+  }
+  if (changed('week', d.daily && d.daily.slice(0, 5))) {
+    var days = (d.daily || []).slice(0, 5).filter(function (x) { return x.high != null; });
+    if (days.length) {
+      var lo = Math.min.apply(null, days.map(function (x) { return x.low != null ? x.low : x.high; }));
+      var hi = Math.max.apply(null, days.map(function (x) { return x.high; }));
+      var span = Math.max(hi - lo, 1);
+      el('week').innerHTML = days.map(function (x) {
+        var low = x.low != null ? x.low : x.high;
+        return '<div class="d"><div class="n">' + dayName(x.d) + '</div><div class="i">' + svg(iconFor(x.cond), 22) + (x.chance >= 50 ? '<span class="c">' + r0(x.chance) + '%</span>' : '') + '</div>' +
+          '<div class="lo">' + r0(x.low) + '°</div><div class="bar"><i style="left:' + ((low - lo) / span * 100) + '%;width:' + ((x.high - low) / span * 100) +
+          '%;background:linear-gradient(90deg,' + tempColour(low) + ',' + tempColour(x.high) + ')"></i></div><div class="hi">' + r0(x.high) + '°</div></div>';
+      }).join('');
+    }
+    touched = true;
+  }
+  if (changed('buttons', [d.buttons, !!(d.daily && d.daily.length)])) { renderButtons(d.buttons); touched = true; }
+  if (changed('welcome', d.welcome)) renderWelcome(d.welcome);
+  if (changed('notes', d.notices)) { renderNotes(d.notices); touched = true; }
+  if (changed('chips', d.chips)) { el('chips').innerHTML = renderChips(d.chips); touched = true; }
+  if (touched) glassify();
+  reveal();
+}
+
+// ---------- the open line ----------
+var es = null;
+function connect() {
+  if (es) es.close();
+  es = new EventSource(FEED);
+  es.onmessage = function (e) { try { render(JSON.parse(e.data)); } catch (err) { /* keep the last good data */ } };
+  es.addEventListener('banner', function (e) { try { showBanner(JSON.parse(e.data)); } catch (err) {} });
+  es.addEventListener('reload', function () { location.reload(); });
+}
+tick();
+setInterval(tick, 10000);
+if (FEED) {
+  connect();
+  // EventSource gives up for good on a refused answer (Home Assistant restarting): try again.
+  setInterval(function () { if (!es || es.readyState === 2) connect(); }, 20000);
+  setInterval(function () { if (CUR) { SIG.events = null; render(CUR); } }, 60000);   // "Today" / "Tomorrow" roll over at midnight
+} else {
+  reveal();
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,164 @@
+banner:
+  fields:
+    screen:
+      example: Intercom screen
+      selector:
+        config_entry:
+          integration: arcane_screen
+    message:
+      required: true
+      example: The washing is still out and rain is coming
+      selector:
+        text:
+    title:
+      example: Rain soon
+      selector:
+        text:
+    icon:
+      default: bell
+      selector:
+        select:
+          options: [bell, rain, door, gate, garage, shield, truck, bin, bolt, drop, person, alert, check]
+    seconds:
+      default: 15
+      selector:
+        number:
+          min: 3
+          max: 120
+          unit_of_measurement: s
+    tone:
+      default: info
+      selector:
+        select:
+          options: [info, good, warn, alert]
+show:
+  fields:
+    screen:
+      selector:
+        config_entry:
+          integration: arcane_screen
+dismiss:
+  fields:
+    screen:
+      selector:
+        config_entry:
+          integration: arcane_screen
+    minutes:
+      example: 10
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
+restart_pipup:
+  fields:
+    screen:
+      selector:
+        config_entry:
+          integration: arcane_screen
+install_pipup:
+  fields:
+    screen:
+      selector:
+        config_entry:
+          integration: arcane_screen
+notice:
+  fields:
+    screen:
+      selector:
+        config_entry:
+          integration: arcane_screen
+    id:
+      required: true
+      example: bin_night
+      selector:
+        text:
+    text:
+      required: true
+      example: Bins out tonight
+      selector:
+        text:
+    icon:
+      default: bell
+      selector:
+        select:
+          options: [bell, rain, door, gate, garage, shield, truck, bin, bolt, drop, person, alert, check, leaf, power, note]
+    level:
+      default: info
+      selector:
+        select:
+          options: [info, good, warn, alert]
+    tint:
+      default: false
+      selector:
+        boolean:
+    tap_clears:
+      default: false
+      selector:
+        boolean:
+    banner_title:
+      example: Rain soon
+      selector:
+        text:
+    banner_message:
+      example: The washing is still out
+      selector:
+        text:
+clear_notice:
+  fields:
+    screen:
+      selector:
+        config_entry:
+          integration: arcane_screen
+    id:
+      example: bin_night
+      selector:
+        text:
+welcome:
+  fields:
+    screen:
+      selector:
+        config_entry:
+          integration: arcane_screen
+    name:
+      required: true
+      example: Alex
+      selector:
+        text:
+    message:
+      example: Front gate is opening
+      selector:
+        text:
+    message_after:
+      example: Front gate is open
+      selector:
+        text:
+    pulse_seconds:
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 600
+          unit_of_measurement: s
+    cameras:
+      selector:
+        entity:
+          domain: camera
+          multiple: true
+    seconds:
+      default: 180
+      selector:
+        number:
+          min: 10
+          max: 1800
+          unit_of_measurement: s
+    note:
+      example: Closes when the garage door shuts
+      selector:
+        text:
+close_welcome:
+  fields:
+    screen:
+      selector:
+        config_entry:
+          integration: arcane_screen

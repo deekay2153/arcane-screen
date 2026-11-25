@@ -1,0 +1,122 @@
+blueprint:
+  name: Arcane Screen - welcome home
+  description: >
+    When one of the chosen people gets home, the screen shows "Welcome home, <name>" with up to three live cameras
+    (the first one big). It closes when the chosen door or garage shuts, after a set time, or with a tap.
+  domain: automation
+  source_url: https://github.com/deekay2153/arcane-screen/blob/main/blueprints/automation/arcane_screen/welcome_home.yaml
+  input:
+    screen:
+      name: Screen
+      description: Leave empty for every screen.
+      default: ""
+      selector:
+        config_entry:
+          integration: arcane_screen
+    people:
+      name: People
+      selector:
+        entity:
+          domain: person
+          multiple: true
+    cameras:
+      name: Cameras (up to 3)
+      description: The first one is shown big, e.g. the driveway or front gate.
+      default: []
+      selector:
+        entity:
+          domain: camera
+          multiple: true
+    message:
+      name: Status line
+      description: Shown with a gently pulsing dot for the first part, e.g. "Front gate is opening".
+      default: Welcome back
+      selector:
+        text:
+    pulse_seconds:
+      name: Pulse for
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: s
+    message_after:
+      name: Status line after that
+      description: Optional, e.g. "Front gate is open".
+      default: ""
+      selector:
+        text:
+    close_entity:
+      name: Close when this shuts (optional)
+      description: For example the garage door, so it closes as you walk in.
+      default: ""
+      selector:
+        entity:
+          domain: [cover, binary_sensor, lock]
+    seconds:
+      name: Close after at most
+      default: 180
+      selector:
+        number:
+          min: 30
+          max: 1800
+          unit_of_measurement: s
+    away_minutes:
+      name: Only after being away at least
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 240
+          unit_of_measurement: min
+
+mode: restart
+
+variables:
+  screen: !input screen
+  cameras: !input cameras
+  message: !input message
+  pulse_seconds: !input pulse_seconds
+  message_after: !input message_after
+  close_entity: !input close_entity
+  seconds: !input seconds
+  away_minutes: !input away_minutes
+  closed_states: ['off', 'closed', 'locked']
+
+trigger:
+  - platform: state
+    entity_id: !input people
+    to: home
+
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.from_state is not none and trigger.from_state.state not in ['unknown', 'unavailable', 'home']
+         and (now() - trigger.from_state.last_changed).total_seconds() >= away_minutes * 60 }}
+
+action:
+  - service: arcane_screen.welcome
+    data:
+      screen: "{{ screen }}"
+      name: "{{ trigger.to_state.name }}"
+      message: "{{ message }}"
+      message_after: "{{ message_after }}"
+      pulse_seconds: "{{ pulse_seconds }}"
+      cameras: "{{ cameras[:3] }}"
+      seconds: "{{ seconds }}"
+      note: "{{ 'Closes when ' ~ state_attr(close_entity, 'friendly_name') ~ ' shuts' if close_entity else '' }}"
+  - condition: template
+    value_template: "{{ close_entity != '' }}"
+  # Wait for it to open first (if it isn't already), then to shut again.
+  - wait_template: "{{ states(close_entity) not in closed_states }}"
+    timeout:
+      seconds: "{{ seconds }}"
+    continue_on_timeout: false
+  - wait_template: "{{ states(close_entity) in closed_states }}"
+    timeout:
+      seconds: "{{ seconds }}"
+    continue_on_timeout: false
+  - service: arcane_screen.close_welcome
+    data:
+      screen: "{{ screen }}"

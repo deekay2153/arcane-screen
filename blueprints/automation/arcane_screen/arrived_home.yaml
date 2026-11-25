@@ -1,0 +1,61 @@
+blueprint:
+  name: Arcane Screen - someone arrived home
+  description: A friendly banner when one of the chosen people gets home, e.g. "Alex is home".
+  domain: automation
+  source_url: https://github.com/deekay2153/arcane-screen/blob/main/blueprints/automation/arcane_screen/arrived_home.yaml
+  input:
+    screen:
+      name: Screen
+      description: Leave empty for every screen.
+      default: ""
+      selector:
+        config_entry:
+          integration: arcane_screen
+    people:
+      name: People
+      selector:
+        entity:
+          domain: person
+          multiple: true
+    message:
+      name: Second line
+      default: Just got home
+      selector:
+        text:
+    away_minutes:
+      name: Only after being away at least
+      description: Stops a phone that drops off the Wi-Fi for a moment from announcing itself.
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 240
+          unit_of_measurement: min
+
+mode: queued
+
+variables:
+  screen: !input screen
+  message: !input message
+  away_minutes: !input away_minutes
+
+trigger:
+  - platform: state
+    entity_id: !input people
+    to: home
+
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.from_state is not none and trigger.from_state.state not in ['unknown', 'unavailable', 'home']
+         and (now() - trigger.from_state.last_changed).total_seconds() >= away_minutes * 60 }}
+
+action:
+  - service: arcane_screen.banner
+    data:
+      screen: "{{ screen }}"
+      title: "{{ trigger.to_state.name }} is home"
+      message: "{{ message }}"
+      icon: person
+      tone: good
+      seconds: 20

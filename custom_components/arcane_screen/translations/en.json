@@ -1,0 +1,268 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a screen",
+        "description": "The screen must be on your network. On a Hikvision indoor station the next step switches ADB on with the station's admin login. On any other Android screen, turn on network ADB yourself first and accept the 'Allow debugging' prompt on the screen the first time.",
+        "data": {
+          "name": "Name",
+          "host": "Screen's IP address",
+          "platform": "Screen type",
+          "adb_port": "ADB port",
+          "ha_url": "Address the screen uses to reach Home Assistant"
+        }
+      },
+      "hikvision": {
+        "title": "Hikvision login",
+        "description": "The indoor station's admin login (the one for its web page). Used to switch ADB on; it tries once each time you press Submit, and stops trying for good if the station ever refuses the login, so a wrong password can't lock the station's account.",
+        "data": {
+          "hik_username": "Username",
+          "hik_password": "Password"
+        }
+      },
+      "failed": {
+        "title": "Install didn't finish",
+        "description": "{error}\n\nSubmit to try again."
+      }
+    },
+    "progress": {
+      "installing": "Installing PiPup on the screen and giving it permission to show the dashboard. This can take a minute or two."
+    },
+    "error": {
+      "hik_auth": "The screen refused that username or password.",
+      "hik_unreachable": "The screen didn't answer. Check the IP address, and that this is a Hikvision indoor station."
+    },
+    "abort": {
+      "already_configured": "This screen is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "What the screen shows",
+        "data": {
+          "weather": "Weather",
+          "weather_hourly": "Hourly weather (optional, if your provider keeps hourly on a separate entity)",
+          "calendars": "Calendars (Up next)",
+          "chips": "Chips along the bottom (up to 8)",
+          "buttons": "Big buttons (up to 6, replace the week forecast)",
+          "buttons_when": "Show the big buttons only while this is on (optional)",
+          "call_entity": "Intercom call entity (optional): the dashboard steps aside while it isn't idle",
+          "clock_24h": "24-hour clock",
+          "open_entrances": "Let chips open gates, garage doors and doors (anyone who can reach the screen's network could)",
+          "return_minutes": "Come back this many minutes after the exit button",
+          "restart_time": "Nightly PiPup restart time",
+          "width": "Screen width (px)",
+          "height": "Screen height (px)"
+        }
+      }
+    },
+    "error": {
+      "too_many_chips": "Pick 8 or fewer.",
+      "too_many_buttons": "Pick 6 or fewer."
+    }
+  },
+  "selector": {
+    "platform": {
+      "options": {
+        "hikvision": "Hikvision indoor station",
+        "android": "Other Android screen"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Dashboard",
+        "state": {
+          "starting": "Starting",
+          "showing": "Showing",
+          "hidden": "Hidden",
+          "in_call": "In a call",
+          "reconnecting": "Reconnecting",
+          "offline": "Offline"
+        }
+      }
+    }
+  },
+  "services": {
+    "banner": {
+      "name": "Show a banner",
+      "description": "Slides a banner over the dashboard.",
+      "fields": {
+        "screen": {
+          "name": "Screen",
+          "description": "Leave empty for every screen."
+        },
+        "message": {
+          "name": "Message",
+          "description": "The banner's text."
+        },
+        "title": {
+          "name": "Title",
+          "description": "Optional bold first line."
+        },
+        "icon": {
+          "name": "Icon",
+          "description": "Symbol on the left."
+        },
+        "seconds": {
+          "name": "Seconds",
+          "description": "How long it stays (tap to close sooner)."
+        },
+        "tone": {
+          "name": "Tone",
+          "description": "Colour: info, good, warn or alert."
+        }
+      }
+    },
+    "show": {
+      "name": "Show the dashboard",
+      "description": "Shows the dashboard now (also ends an exit-button break).",
+      "fields": {
+        "screen": {
+          "name": "Screen",
+          "description": "Leave empty for every screen."
+        }
+      }
+    },
+    "dismiss": {
+      "name": "Hide the dashboard",
+      "description": "Hides the dashboard, optionally for a number of minutes.",
+      "fields": {
+        "screen": {
+          "name": "Screen",
+          "description": "Leave empty for every screen."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "Bring it back after this long (empty = until the next show)."
+        }
+      }
+    },
+    "restart_pipup": {
+      "name": "Restart PiPup",
+      "description": "Restarts PiPup on the screen (frees its memory) and shows the dashboard again.",
+      "fields": {
+        "screen": {
+          "name": "Screen",
+          "description": "Leave empty for every screen."
+        }
+      }
+    },
+    "install_pipup": {
+      "name": "Install or update PiPup",
+      "description": "Installs the PiPup version this integration was tested with.",
+      "fields": {
+        "screen": {
+          "name": "Screen",
+          "description": "Leave empty for every screen."
+        }
+      }
+    },
+    "notice": {
+      "name": "Show a notice",
+      "description": "Puts a small pill under the clock that stays until it is cleared. Warn and alert notices can also tint the glass amber or red.",
+      "fields": {
+        "screen": {
+          "name": "Screen",
+          "description": "Leave empty for every screen."
+        },
+        "id": {
+          "name": "ID",
+          "description": "A short name for this notice, e.g. bin_night. Sending the same ID again updates it."
+        },
+        "text": {
+          "name": "Text",
+          "description": "Up to 40 characters."
+        },
+        "icon": {
+          "name": "Icon",
+          "description": "Symbol shown in the pill."
+        },
+        "level": {
+          "name": "Level",
+          "description": "info, good, warn (amber) or alert (red)."
+        },
+        "tint": {
+          "name": "Tint the glass",
+          "description": "Warn and alert notices tint every glass panel amber or red."
+        },
+        "tap_clears": {
+          "name": "Tap clears it",
+          "description": "Let people clear it by tapping the pill on the screen."
+        },
+        "banner_title": {
+          "name": "Banner title",
+          "description": "Optional. A banner slides in too, but only when this notice is new (re-sending it doesn't repeat the banner)."
+        },
+        "banner_message": {
+          "name": "Banner message",
+          "description": "Optional text for that banner."
+        }
+      }
+    },
+    "clear_notice": {
+      "name": "Clear a notice",
+      "description": "Takes a notice off the screen.",
+      "fields": {
+        "screen": {
+          "name": "Screen",
+          "description": "Leave empty for every screen."
+        },
+        "id": {
+          "name": "ID",
+          "description": "Leave empty to clear every notice."
+        }
+      }
+    },
+    "welcome": {
+      "name": "Welcome home",
+      "description": "Full-screen 'Welcome home, <name>' with up to three live cameras (the first one big). Closes after the set time, with a tap, or with Close welcome.",
+      "fields": {
+        "screen": {
+          "name": "Screen",
+          "description": "Leave empty for every screen."
+        },
+        "name": {
+          "name": "Name",
+          "description": "Shown as 'Welcome home, <name>'."
+        },
+        "message": {
+          "name": "Status line",
+          "description": "Shown with a gently pulsing dot while 'Pulse for' runs."
+        },
+        "message_after": {
+          "name": "Status line after",
+          "description": "Replaces the status line once the pulse ends."
+        },
+        "pulse_seconds": {
+          "name": "Pulse for",
+          "description": "How long the dot pulses."
+        },
+        "cameras": {
+          "name": "Cameras",
+          "description": "Up to three. They can only be watched through the screen while the welcome screen is up."
+        },
+        "seconds": {
+          "name": "Close after",
+          "description": "It closes by itself after this long."
+        },
+        "note": {
+          "name": "Small print",
+          "description": "Optional line at the bottom right."
+        }
+      }
+    },
+    "close_welcome": {
+      "name": "Close welcome",
+      "description": "Closes the welcome screen.",
+      "fields": {
+        "screen": {
+          "name": "Screen",
+          "description": "Leave empty for every screen."
+        }
+      }
+    }
+  }
+}

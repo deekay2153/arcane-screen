@@ -1,0 +1,24 @@
+{
+  "domain": "arcane_screen",
+  "name": "Arcane Screen",
+  "codeowners": [
+    "@deekay2153"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "http"
+  ],
+  "after_dependencies": [
+    "weather",
+    "calendar",
+    "camera"
+  ],
+  "documentation": "https://github.com/deekay2153/arcane-screen",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/deekay2153/arcane-screen/issues",
+  "requirements": [
+    "adb-shell[async]==0.4.4"
+  ],
+  "version": "0.1.0"
+}

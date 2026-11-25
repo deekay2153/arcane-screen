@@ -1,0 +1,163 @@
+blueprint:
+  name: Arcane Screen - bin night
+  description: >
+    The evening before collection, a "bins out" notice appears under the clock and the glass turns amber.
+    If nobody taps it away, it turns red later on. It clears itself the next morning.
+    Collection days come from a calendar (an event whose title contains a word, e.g. "bin"), or from fixed weekdays.
+  domain: automation
+  source_url: https://github.com/deekay2153/arcane-screen/blob/main/blueprints/automation/arcane_screen/bin_night.yaml
+  input:
+    screen:
+      name: Screen
+      description: Leave empty for every screen.
+      default: ""
+      selector:
+        config_entry:
+          integration: arcane_screen
+    collection_weekdays:
+      name: Collection days
+      description: The days the bins are collected. Ignored if a calendar is picked below.
+      default: []
+      selector:
+        select:
+          multiple: true
+          options:
+            - { label: Monday, value: "0" }
+            - { label: Tuesday, value: "1" }
+            - { label: Wednesday, value: "2" }
+            - { label: Thursday, value: "3" }
+            - { label: Friday, value: "4" }
+            - { label: Saturday, value: "5" }
+            - { label: Sunday, value: "6" }
+    calendar:
+      name: Calendar (optional)
+      description: Use a calendar instead of fixed days. Any event tomorrow whose title contains the word below counts.
+      default: ""
+      selector:
+        entity:
+          domain: calendar
+    keyword:
+      name: Word in the event title
+      default: bin
+      selector:
+        text:
+    text:
+      name: Notice text
+      default: Bins out tonight
+      selector:
+        text:
+    red_text:
+      name: Notice text once it turns red
+      default: Bins still not out
+      selector:
+        text:
+    warn_time:
+      name: Amber from
+      default: "18:00:00"
+      selector:
+        time:
+    red_time:
+      name: Red from
+      default: "20:00:00"
+      selector:
+        time:
+    clear_time:
+      name: Clear on collection morning at
+      default: "10:00:00"
+      selector:
+        time:
+    tint:
+      name: Tint the glass
+      default: true
+      selector:
+        boolean:
+
+mode: queued
+
+variables:
+  screen: !input screen
+  weekdays: !input collection_weekdays
+  calendar: !input calendar
+  keyword: !input keyword
+  text: !input text
+  red_text: !input red_text
+  tint: !input tint
+  # Is the bin notice up on any screen right now? (The screen's status sensor lists its notices; they survive restarts.)
+  bin_up: >
+    {{ 'bin_night' in (integration_entities('arcane_screen') | select('match', 'sensor[.]')
+       | map('state_attr', 'notices') | reject('none') | sum(start=[])) }}
+
+trigger:
+  - platform: time
+    at: !input warn_time
+    id: warn
+  - platform: time
+    at: !input red_time
+    id: red
+  - platform: time
+    at: !input clear_time
+    id: clear
+
+action:
+  - if:
+      - condition: trigger
+        id: clear
+    then:
+      - service: arcane_screen.clear_notice
+        data:
+          screen: "{{ screen }}"
+          id: bin_night
+      - stop: Cleared for the day
+  # Red: only if the amber notice is still up (nobody tapped it away). Checked at red time, so a restart in between is fine.
+  - if:
+      - condition: trigger
+        id: red
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ bin_up }}"
+        then:
+          - service: arcane_screen.notice
+            data:
+              screen: "{{ screen }}"
+              id: bin_night
+              text: "{{ red_text }}"
+              icon: bin
+              level: alert
+              tint: "{{ tint }}"
+              tap_clears: true
+      - stop: Red-time check done
+  # Is tomorrow a collection day? If not, stop here.
+  - if:
+      - condition: template
+        value_template: "{{ calendar != '' }}"
+    then:
+      - service: calendar.get_events
+        target:
+          entity_id: "{{ calendar }}"
+        data:
+          start_date_time: "{{ (today_at('00:00') + timedelta(days=1)).isoformat() }}"
+          end_date_time: "{{ (today_at('00:00') + timedelta(days=2)).isoformat() }}"
+        response_variable: cal
+      - if:
+          - condition: template
+            value_template: >
+              {{ (cal[calendar].events | default([]))
+                 | selectattr('summary', 'search', keyword, ignorecase=true) | list | count == 0 }}
+        then:
+          - stop: No collection tomorrow
+    else:
+      - if:
+          - condition: template
+            value_template: "{{ ((now() + timedelta(days=1)).weekday() | string) not in weekdays }}"
+        then:
+          - stop: No collection tomorrow
+  - service: arcane_screen.notice
+    data:
+      screen: "{{ screen }}"
+      id: bin_night
+      text: "{{ text }}"
+      icon: bin
+      level: warn
+      tint: "{{ tint }}"
+      tap_clears: true

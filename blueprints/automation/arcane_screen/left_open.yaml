@@ -1,0 +1,75 @@
+blueprint:
+  name: Arcane Screen - left open
+  description: >
+    When a door, gate, garage or window has been open for a while, a red notice stays under the clock (and a banner
+    slides in once) until it is closed.
+  domain: automation
+  source_url: https://github.com/deekay2153/arcane-screen/blob/main/blueprints/automation/arcane_screen/left_open.yaml
+  input:
+    screen:
+      name: Screen
+      description: Leave empty for every screen.
+      default: ""
+      selector:
+        config_entry:
+          integration: arcane_screen
+    target:
+      name: Door, gate or window
+      selector:
+        entity:
+          domain: [binary_sensor, cover, lock]
+    minutes:
+      name: Open for at least
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 240
+          unit_of_measurement: min
+    tint:
+      name: Tint the glass red
+      default: false
+      selector:
+        boolean:
+
+mode: restart
+
+variables:
+  screen: !input screen
+  target: !input target
+  minutes: !input minutes
+  tint: !input tint
+  nid: "open_{{ target | replace('.', '_') }}"
+  open_states: ['on', 'open', 'opening', 'unlocked']
+
+trigger:
+  - platform: state
+    entity_id: !input target
+  - platform: homeassistant
+    event: start
+
+action:
+  - if:
+      - condition: template
+        value_template: "{{ states(target) not in open_states }}"
+    then:
+      - service: arcane_screen.clear_notice
+        data:
+          screen: "{{ screen }}"
+          id: "{{ nid }}"
+      - stop: Closed
+  - wait_template: "{{ states(target) not in open_states }}"
+    timeout:
+      minutes: "{{ minutes }}"
+  - condition: template
+    value_template: "{{ not wait.completed }}"
+  - service: arcane_screen.notice
+    data:
+      screen: "{{ screen }}"
+      id: "{{ nid }}"
+      text: "{{ ((state_attr(target, 'friendly_name') or target) ~ ' open')[:40] }}"
+      icon: alert
+      level: alert
+      tint: "{{ tint }}"
+      banner_title: "{{ state_attr(target, 'friendly_name') }} left open"
+      banner_message: "Open for {{ minutes | int }} minutes"

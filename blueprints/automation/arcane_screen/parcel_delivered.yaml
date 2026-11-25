@@ -1,0 +1,68 @@
+blueprint:
+  name: Arcane Screen - parcel delivered
+  description: >
+    When a parcel counter goes up (for example from the Mail and Packages integration) or a "parcel" sensor turns on,
+    a banner slides in and a notice shows how many arrived today. The notice clears at midnight.
+  domain: automation
+  source_url: https://github.com/deekay2153/arcane-screen/blob/main/blueprints/automation/arcane_screen/parcel_delivered.yaml
+  input:
+    screen:
+      name: Screen
+      description: Leave empty for every screen.
+      default: ""
+      selector:
+        config_entry:
+          integration: arcane_screen
+    source:
+      name: Parcel counter or sensor
+      selector:
+        entity:
+          domain: [sensor, binary_sensor, input_number, counter]
+
+mode: queued
+
+variables:
+  screen: !input screen
+
+trigger:
+  - platform: state
+    entity_id: !input source
+    not_from: [unknown, unavailable]
+    not_to: [unknown, unavailable]
+    id: change
+  - platform: time
+    at: "00:00:00"
+    id: midnight
+
+action:
+  - if:
+      - condition: trigger
+        id: midnight
+    then:
+      - service: arcane_screen.clear_notice
+        data:
+          screen: "{{ screen }}"
+          id: parcels
+      - stop: New day
+  - variables:
+      before: "{{ trigger.from_state.state }}"
+      after: "{{ trigger.to_state.state }}"
+      count: "{{ (after | float(0)) | int if after | is_number else (1 if after == 'on' else 0) }}"
+      arrived: "{{ (after | float(0) > before | float(0)) if after | is_number else (after == 'on' and before != 'on') }}"
+  - condition: template
+    value_template: "{{ arrived and count | int > 0 }}"
+  - service: arcane_screen.notice
+    data:
+      screen: "{{ screen }}"
+      id: parcels
+      text: "{{ count }} parcel{{ 's' if count | int > 1 else '' }} today"
+      icon: truck
+      level: good
+  - service: arcane_screen.banner
+    data:
+      screen: "{{ screen }}"
+      title: Delivery
+      message: A parcel has arrived
+      icon: truck
+      tone: good
+      seconds: 20

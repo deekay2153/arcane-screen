@@ -1,0 +1,91 @@
+blueprint:
+  name: Arcane Screen - started and finished
+  description: >
+    A banner when something starts and when it finishes: an irrigation zone or valve, the washing machine,
+    the dishwasher, a robot vacuum... Anything that turns on and off (for appliances, use an on/off sensor
+    such as a power-based binary sensor).
+  domain: automation
+  source_url: https://github.com/deekay2153/arcane-screen/blob/main/blueprints/automation/arcane_screen/started_finished.yaml
+  input:
+    screen:
+      name: Screen
+      description: Leave empty for every screen.
+      default: ""
+      selector:
+        config_entry:
+          integration: arcane_screen
+    thing:
+      name: What to watch
+      selector:
+        entity:
+          domain: [switch, valve, binary_sensor, input_boolean, fan, vacuum]
+    started:
+      name: Banner when it starts
+      description: "{name} is replaced by its name. Leave empty for no banner."
+      default: "{name} started"
+      selector:
+        text:
+    finished:
+      name: Banner when it finishes
+      description: "{name} is replaced by its name. Leave empty for no banner."
+      default: "{name} finished"
+      selector:
+        text:
+    icon:
+      name: Icon when it starts
+      default: drop
+      selector:
+        select:
+          options: [drop, check, bolt, leaf, power, bell, note]
+    min_minutes:
+      name: Ignore runs shorter than
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: min
+
+mode: queued
+
+variables:
+  screen: !input screen
+  started: !input started
+  finished: !input finished
+  icon: !input icon
+  min_minutes: !input min_minutes
+  on_states: ['on', 'open', 'cleaning']
+
+trigger:
+  - platform: state
+    entity_id: !input thing
+    not_from: [unknown, unavailable]
+    not_to: [unknown, unavailable]
+
+action:
+  - variables:
+      name: "{{ trigger.to_state.name }}"
+      now_on: "{{ trigger.to_state.state in on_states }}"
+      was_on: "{{ trigger.from_state.state in on_states }}"
+      ran: "{{ [((trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() / 60) | round(1), 0] | max }}"
+  - choose:
+      - conditions: "{{ now_on and not was_on and started != '' }}"
+        sequence:
+          - service: arcane_screen.banner
+            data:
+              screen: "{{ screen }}"
+              title: "{{ started | replace('{name}', name) }}"
+              message: "Started at {{ now().strftime('%I:%M %p') | regex_replace('^0', '') | lower }}"
+              icon: "{{ icon }}"
+              tone: info
+              seconds: 15
+      - conditions: "{{ was_on and not now_on and finished != '' and ran | float(0) >= min_minutes | float(0) }}"
+        sequence:
+          - service: arcane_screen.banner
+            data:
+              screen: "{{ screen }}"
+              title: "{{ finished | replace('{name}', name) }}"
+              message: "Ran for {{ ran | round }} min"
+              icon: check
+              tone: good
+              seconds: 20
