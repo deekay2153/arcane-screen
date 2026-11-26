@@ -45,7 +45,8 @@ Built and tested on a **Hikvision DS-KH9510 indoor station** (Android 10, 1024×
 2. Settings → Devices & services → Add integration → **Arcane Screen**.
 3. Enter the screen's IP address and pick its type:
    - **Hikvision indoor station:** next you enter the station's admin login (the one for its web page). The integration uses it to switch ADB on. It tries once each time you press Submit, and if the station ever refuses the login it stops trying until you type it again, so a wrong password can't lock the station's admin account.
-   - **Other Android screen:** turn on network ADB on the screen yourself first, and accept the "Allow debugging" prompt on the screen the first time.
+   - **Other Android screen:** turn on network ADB on the screen yourself first, and accept the "Allow debugging" prompt on the screen the first time. Also pick this for a Hikvision station that has no web page, or whose ADB you already switch on yourself.
+   - The screen needs **Android 6.0 or newer** (PiPup's minimum). Older screens, such as some first-revision Hikvision stations, get a message saying so and nothing is installed.
 4. The integration downloads PiPup from its official GitHub release, checks the file, installs it and starts it. This takes a minute or two.
 5. Open the integration's **Configure** to pick what the screen shows.
 
@@ -115,6 +116,22 @@ Read this before you put anything that opens or unlocks in the chips or big butt
 - That's why locks and alarms are always view-only, and gates, garage doors and doors are view-only unless you turn that option on. Don't put a script or switch that opens a door, gate or garage in the chips or buttons unless you're happy with that.
 - If you run Home Assistant behind a reverse proxy, make sure it passes on the caller's real address, or Home Assistant may see every request as local.
 - Your Home Assistant login and tokens are never on the screen.
+
+## What it puts on the screen, and removing it
+
+Setup installs exactly one app on the screen, **PiPup** (`nl.rogro82.pipup`), and gives it permission to draw over other apps. Nothing else on the screen is changed: the intercom's own apps and settings are left alone. On a Hikvision station, setup also switches ADB on. Home Assistant keeps its own ADB key in `.storage/arcane_screen_adbkey`.
+
+To remove it:
+
+1. Settings → Devices & services → Arcane Screen → ⋮ → **Delete**. The dashboard closes on the screen and the integration's saved notices are removed.
+2. To take PiPup off the screen as well, from any computer with ADB:
+
+   ```
+   adb connect <screen-ip>:5555
+   adb uninstall nl.rogro82.pipup
+   ```
+
+3. ADB stays on until you switch it off yourself.
 
 ## Things to know
 

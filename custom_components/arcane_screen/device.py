@@ -32,6 +32,9 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+MIN_SDK = 23            # PiPup 0.31 needs Android 6.0 or newer
+SHELL_WAIT = 30.0       # seconds; slow screens can take well over 9 s to answer "dumpsys" or "pm install"
+
 RESTART_CMDS = (
     f"am force-stop {PIPUP_PACKAGE}",
     # QUICKBOOT_POWERON is not a protected broadcast; flag 0x20 includes stopped packages. Starts PiPup's service.
@@ -42,11 +45,11 @@ RESTART_CMDS = (
 class ScreenError(Exception):
     """Something on the screen didn't answer as expected (message is safe to show)."""
 
-    _refused: dict[str, bool] = {}   # host -> the station refused our login (cleared by a Home Assistant restart or by typing the login again in setup)
-
 
 class Screen:
     """One Android screen running (or about to run) PiPup."""
+
+    _refused: dict[str, bool] = {}   # host -> the station refused our login (cleared by a Home Assistant restart or by typing the login again in setup)
 
     def __init__(
         self,
@@ -176,10 +179,20 @@ class Screen:
             try:
                 out = []
                 for cmd in commands:
-                    out.append(str(await dev.shell(cmd, read_timeout_s=30) or "").strip())
+                    out.append(str(await dev.shell(cmd, transport_timeout_s=SHELL_WAIT, read_timeout_s=60) or "").strip())
                 return out
+            except Exception as err:  # noqa: BLE001 - adb-shell raises many kinds
+                raise ScreenError(f"The screen stopped answering over ADB ({err})") from err
             finally:
                 await dev.close()
+
+    async def check_android(self) -> None:
+        """Refuse early, with a clear message, on screens too old for PiPup (Android tells us only after the upload)."""
+        sdk, release = await self.adb("getprop ro.build.version.sdk", "getprop ro.build.version.release")
+        if sdk.isdigit() and int(sdk) < MIN_SDK:
+            raise ScreenError(
+                f"This screen runs Android {release or '?'} and PiPup needs Android 6.0 or newer, so it can't run here"
+            )
 
     async def restart_pipup(self) -> None:
         await self.adb(*RESTART_CMDS)
@@ -195,6 +208,7 @@ class Screen:
         Returns the installed version. PiPup's own update checks are switched off: updates come from this integration,
         one tested version at a time, so nobody has to tap Android's install prompt.
         """
+        await self.check_android()
         current = await self.pipup_installed_version()
         if current != PIPUP_VERSION:
             r = await get_async_client(self.hass).get(PIPUP_APK_URL, follow_redirects=True, timeout=120)
@@ -215,9 +229,11 @@ class Screen:
                 async with self._adb_lock:
                     dev = await self._connect()
                     try:
-                        await dev.push(local, "/data/local/tmp/pipup.apk", read_timeout_s=120)
-                        res = str(await dev.shell("pm install -r /data/local/tmp/pipup.apk", read_timeout_s=120))
-                        await dev.shell("rm /data/local/tmp/pipup.apk")
+                        await dev.push(local, "/data/local/tmp/pipup.apk", transport_timeout_s=SHELL_WAIT, read_timeout_s=120)
+                        res = str(await dev.shell("pm install -r /data/local/tmp/pipup.apk", transport_timeout_s=SHELL_WAIT, read_timeout_s=180))
+                        await dev.shell("rm /data/local/tmp/pipup.apk", transport_timeout_s=SHELL_WAIT)
+                    except Exception as err:  # noqa: BLE001
+                        raise ScreenError(f"The screen stopped answering while PiPup was being installed ({err})") from err
                     finally:
                         await dev.close()
             finally:

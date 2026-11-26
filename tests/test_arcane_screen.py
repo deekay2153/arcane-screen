@@ -219,3 +219,50 @@ async def test_entrances_view_only_by_default(hass: HomeAssistant, hass_client_n
     hass.config_entries.async_update_entry(entry, options={"chips": ["cover.front_gate", "cover.blind"], "open_entrances": True})
     await hass.async_block_till_done()
     assert hass.data[DOMAIN][entry.entry_id].build()["chips"][0]["actions"]
+
+
+async def test_config_flow_hikvision(hass: HomeAssistant, no_screen) -> None:
+    """The Hikvision login step (issue #3: it crashed before asking the station anything)."""
+    await async_setup_component(hass, "http", {})
+    with patch("custom_components.arcane_screen.device.Screen.hik_adb_on", AsyncMock(return_value=True)), patch(
+        "custom_components.arcane_screen.device.Screen.install_pipup", AsyncMock(return_value="0.31.0")
+    ):
+        r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        r = await hass.config_entries.flow.async_configure(
+            r["flow_id"], {"name": "Hall", "host": "10.0.0.8", "platform": "hikvision", "adb_port": 5555, "ha_url": "http://10.0.0.2:8123"}
+        )
+        assert r["type"] is FlowResultType.FORM and r["step_id"] == "hikvision"
+        r = await hass.config_entries.flow.async_configure(r["flow_id"], {"hik_username": "admin", "hik_password": "pw"})
+        for _ in range(5):
+            if r["type"] is FlowResultType.CREATE_ENTRY:
+                break
+            await hass.async_block_till_done()
+            r = await hass.config_entries.flow.async_configure(r["flow_id"])
+    assert r["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_hik_login_refused_once(hass: HomeAssistant) -> None:
+    """A wrong Hikvision password is tried once, then never again until it is typed again."""
+    from custom_components.arcane_screen.device import Screen, ScreenError
+
+    screen = Screen(hass, "10.0.0.7", 5555, "admin", "wrong")
+    put = AsyncMock(return_value=type("R", (), {"status_code": 401})())
+    with patch("httpx.AsyncClient.put", put):
+        with pytest.raises(ScreenError):
+            await screen.hik_adb_on()
+        assert await screen.hik_adb_on() is False
+    assert put.await_count == 1
+    Screen._refused.pop("10.0.0.7", None)
+
+
+async def test_old_android_refused(hass: HomeAssistant) -> None:
+    """Screens older than Android 6 get a plain message before anything is uploaded (issue #2)."""
+    from custom_components.arcane_screen.device import Screen, ScreenError
+
+    screen = Screen(hass, "10.0.0.6", 5555)
+    with patch.object(Screen, "adb", AsyncMock(return_value=["19", "4.4.2"])), patch(
+        "custom_components.arcane_screen.device.get_async_client"
+    ) as client:
+        with pytest.raises(ScreenError, match="Android 4.4.2"):
+            await screen.install_pipup()
+    client.assert_not_called()
